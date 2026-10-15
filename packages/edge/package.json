@@ -1,0 +1,31 @@
+{
+  "name": "@agent-link/edge",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "agent-link-edge: per-session stdio MCP server and hook binary for the agent-link plugin.",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/muralx/agent-link.git",
+    "directory": "packages/edge"
+  },
+  "bin": {
+    "agent-link-edge": "src/bin.ts"
+  },
+  "exports": {
+    ".": "./src/index.ts",
+    "./testkit": "./src/testkit.ts"
+  },
+  "files": [
+    "src"
+  ],
+  "scripts": {
+    "typecheck": "tsc -p ."
+  },
+  "dependencies": {
+    "@agent-link/protocol": "workspace:*",
+    "@agent-link/hub": "workspace:*",
+    "@modelcontextprotocol/sdk": "^1.32.0 <2",
+    "zod": "^4"
+  }
+}

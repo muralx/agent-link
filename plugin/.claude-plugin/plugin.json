@@ -1,0 +1,12 @@
+{
+  "name": "agent-link",
+  "description": "Lets this Claude Code session talk to the other agents of its workspace: register with a name and a description, see who is online, ask and answer in conversations, and receive peers' messages as channel notifications while you keep working.",
+  "version": "0.1.0",
+  "author": {
+    "name": "muralx"
+  },
+  "homepage": "https://github.com/muralx/agent-link",
+  "repository": "https://github.com/muralx/agent-link",
+  "license": "Apache-2.0",
+  "keywords": ["agents", "messaging", "channel", "mcp", "multi-agent"]
+}

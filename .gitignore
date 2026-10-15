@@ -1,0 +1,12 @@
+node_modules/
+dist/
+*.db
+*.db-wal
+*.db-shm
+coverage/
+
+# local, per machine
+.agent-link.json
+.tracker-project.json
+docs/handoffs/
+.claude/

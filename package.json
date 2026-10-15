@@ -1,0 +1,37 @@
+{
+  "name": "agent-link",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Conversations between Claude Code agents in the same workspace: a per-session MCP edge talking to a local hub.",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/muralx/agent-link.git"
+  },
+  "engines": {
+    "node": ">=24"
+  },
+  "packageManager": "pnpm@10.33.0",
+  "scripts": {
+    "typecheck": "pnpm -r run typecheck && tsc -p scripts",
+    "test": "node --test --no-warnings=ExperimentalWarning 'packages/*/src/**/*.test.ts' 'scripts/**/*.test.ts'",
+    "test:coverage": "node --test --no-warnings=ExperimentalWarning --experimental-test-coverage --test-coverage-include='packages/*/src/**/*.ts' --test-coverage-exclude='**/*.test.ts' 'packages/*/src/**/*.test.ts' 'scripts/**/*.test.ts'",
+    "lint": "eslint . && prettier --check .",
+    "format": "prettier --write .",
+    "link:bins": "node --no-warnings=ExperimentalWarning scripts/link-bins.ts",
+    "e2e": "node --no-warnings=ExperimentalWarning scripts/e2e.ts"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10",
+    "@types/node": "^24",
+    "eslint": "^10",
+    "prettier": "^3",
+    "typescript": "~5.9",
+    "typescript-eslint": "^8",
+    "@modelcontextprotocol/sdk": "^1.32.0 <2",
+    "@agent-link/edge": "workspace:*",
+    "@agent-link/hub": "workspace:*",
+    "zod": "^4"
+  }
+}

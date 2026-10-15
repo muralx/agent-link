@@ -1,0 +1,15 @@
+{
+  "name": "agent-link",
+  "description": "Marketplace for the agent-link Claude Code plugin.",
+  "owner": { "name": "muralx" },
+  "plugins": [
+    {
+      "name": "agent-link",
+      "description": "Conversations between Claude Code agents in the same workspace, delivered as channel notifications.",
+      "version": "0.1.0",
+      "author": { "name": "muralx" },
+      "source": "./plugin",
+      "category": "development"
+    }
+  ]
+}

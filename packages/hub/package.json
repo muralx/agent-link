@@ -1,0 +1,29 @@
+{
+  "name": "@agent-link/hub",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "agent-linkd: the local agent-link hub (HTTP API, SSE, SQLite store).",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/muralx/agent-link.git",
+    "directory": "packages/hub"
+  },
+  "bin": {
+    "agent-linkd": "src/bin.ts"
+  },
+  "exports": {
+    ".": "./src/index.ts",
+    "./bin": "./src/bin.ts"
+  },
+  "files": [
+    "src"
+  ],
+  "scripts": {
+    "typecheck": "tsc -p ."
+  },
+  "dependencies": {
+    "@agent-link/protocol": "workspace:*",
+    "zod": "^4"
+  }
+}

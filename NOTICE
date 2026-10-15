@@ -1,0 +1,9 @@
+agent-link
+Copyright 2026 Diego Belfer
+
+This product is licensed under the Apache License, Version 2.0
+(see LICENSE).
+
+The source tree does not bundle third-party code. Its npm dependencies
+are listed in the package.json files and pnpm-lock.yaml and keep their
+own licenses.

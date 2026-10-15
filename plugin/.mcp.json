@@ -1,0 +1,6 @@
+{
+  "agent-link": {
+    "type": "stdio",
+    "command": "agent-link-edge"
+  }
+}

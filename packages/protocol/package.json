@@ -1,0 +1,24 @@
+{
+  "name": "@agent-link/protocol",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Shared ids, zod schemas and types for the agent-link hub API and tools.",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/muralx/agent-link.git",
+    "directory": "packages/protocol"
+  },
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "files": [
+    "src"
+  ],
+  "scripts": {
+    "typecheck": "tsc -p ."
+  },
+  "dependencies": {
+    "zod": "^4"
+  }
+}
