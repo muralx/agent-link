@@ -5,7 +5,8 @@ import { DatabaseSync } from 'node:sqlite';
  * spec §4, including the agent's provisional flag and the window id on agent
  * and session, plus the partial unique index that keeps names unique among
  * online agents of a workspace, the guard's columns on agent (watcher,
- * quarantined_at, quarantine_reason) and its incident table. Columns added
+ * quarantined_at, quarantine_reason), its incident table and the
+ * conversation kind (direct, announcement or group). Columns added
  * after the first release are also listed in MIGRATIONS so existing files
  * catch up.
  */
@@ -38,6 +39,7 @@ CREATE TABLE IF NOT EXISTS conversation (
   id         TEXT PRIMARY KEY,
   workspace  TEXT NOT NULL,
   subject    TEXT,
+  kind       TEXT NOT NULL DEFAULT 'group' CHECK (kind IN ('direct', 'announcement', 'group')),
   created_by TEXT NOT NULL REFERENCES agent(id),
   created_at TEXT NOT NULL
 );
@@ -115,8 +117,9 @@ export function openDatabase(path: string): DatabaseSync {
 /**
  * MIGRATIONS lists columns added after the first release as [table, column,
  * definition]; migrate adds each one that an existing database lacks. The
- * guard's agent columns (watcher, quarantined_at, quarantine_reason) are the
- * latest.
+ * guard's agent columns (watcher, quarantined_at, quarantine_reason) came
+ * next; the conversation kind is the latest, and conversations that predate it
+ * become groups, which is how they behaved.
  */
 const MIGRATIONS: [table: string, column: string, definition: string][] = [
   ['agent', 'provisional', 'INTEGER NOT NULL DEFAULT 0'],
@@ -125,6 +128,7 @@ const MIGRATIONS: [table: string, column: string, definition: string][] = [
   ['agent', 'watcher', 'INTEGER NOT NULL DEFAULT 0'],
   ['agent', 'quarantined_at', 'TEXT'],
   ['agent', 'quarantine_reason', 'TEXT'],
+  ['conversation', 'kind', "TEXT NOT NULL DEFAULT 'group'"],
 ];
 
 /**

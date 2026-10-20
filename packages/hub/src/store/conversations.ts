@@ -1,15 +1,17 @@
 import type { DatabaseSync } from 'node:sqlite';
-import { newId, type Conversation } from '@agent-link/protocol';
+import { newId, type Conversation, type ConversationKind } from '@agent-link/protocol';
 import { now } from './db.ts';
 
 /**
  * CreateConversation is the input of ConversationStore.create; participantIds
- * should include the creator.
+ * should include the creator, and kind decides who receives later messages.
  */
 export interface CreateConversation {
   workspace: string;
   createdBy: string;
   subject: string | null;
+  /** kind is the new conversation's kind: direct, announcement or group. */
+  kind: ConversationKind;
   participantIds: string[];
 }
 
@@ -21,8 +23,8 @@ export interface ParticipantRef {
 
 /**
  * ConversationStore owns the conversation and participant tables: creating
- * threads, growing their participant set and answering membership questions.
- * Messages live in MessageStore.
+ * threads of a given kind, changing the kind, growing their participant set and
+ * answering membership questions. Messages live in MessageStore.
  */
 export class ConversationStore {
   readonly #db: DatabaseSync;
@@ -32,34 +34,40 @@ export class ConversationStore {
   }
 
   /**
-   * create inserts a conversation and its initial participants and returns the
-   * header.
+   * create inserts a conversation of the given kind with its initial
+   * participants and returns the header.
    */
   create(input: CreateConversation): Conversation {
     const id = newId('cv');
     const ts = now();
     this.#db
       .prepare(
-        'INSERT INTO conversation (id, workspace, subject, created_by, created_at) VALUES (?, ?, ?, ?, ?)',
+        'INSERT INTO conversation (id, workspace, subject, kind, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?)',
       )
-      .run(id, input.workspace, input.subject, input.createdBy, ts);
+      .run(id, input.workspace, input.subject, input.kind, input.createdBy, ts);
     this.addParticipants(id, input.participantIds);
     return {
       id,
       workspace: input.workspace,
       subject: input.subject,
+      kind: input.kind,
       created_by: input.createdBy,
       created_at: ts,
     };
   }
 
-  /** get returns the conversation header or undefined. */
+  /** get returns the conversation header, kind included, or undefined. */
   get(id: string): Conversation | undefined {
     return this.#db
       .prepare(
-        'SELECT id, workspace, subject, created_by, created_at FROM conversation WHERE id = ?',
+        'SELECT id, workspace, subject, kind, created_by, created_at FROM conversation WHERE id = ?',
       )
       .get(id) as Conversation | undefined;
+  }
+
+  /** setKind changes a conversation's kind (a direct one that gains a third participant becomes a group). */
+  setKind(id: string, kind: ConversationKind): void {
+    this.#db.prepare('UPDATE conversation SET kind = ? WHERE id = ?').run(kind, id);
   }
 
   /**

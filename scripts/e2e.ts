@@ -130,18 +130,21 @@ async function waitFor(pred: () => boolean, what: string, timeoutMs = 5000): Pro
  * stdio (architect and designer in ws1, stranger in ws2); the first edge spawns
  * agent-linkd. Each edge has its own session and window id, so it registers
  * provisionally on start, and the three then identify themselves without
- * passing session ids. It asserts workspace visibility, the peer identified
- * event, channel notification delivery, a reply received through await,
- * workspace-scoped broadcast and the offline rules (send to an unregistered
- * peer fails with peer_not_found, a reply to an offline participant is recorded
- * as offline).
+ * passing session ids. It asserts workspace visibility, that joining and
+ * identifying wake nobody, channel notification delivery (subject and body
+ * only, the rest in the tag's meta), a reply received through await, a
+ * workspace-scoped broadcast that, being information between agents, waits in
+ * the designer's inbox instead of waking it, and the offline rules (send to an
+ * unregistered peer fails with peer_not_found, a reply to an offline
+ * participant is recorded as offline).
  *
- * It also exercises the guard with two more edges in ws1, a human relay (alice)
- * and a watcher: designer repeating one message is quarantined on the sixth
- * send, the relay is told by guard over the channel, peers marks designer
- * quarantined, the watcher's audit feed shows the five delivered repeats,
- * designer cannot release itself (unauthorized), the relay releases it and
- * designer can send again.
+ * It also exercises announcements and the guard with two more edges in ws1, a
+ * human relay (alice) and a watcher: the relay's send to * is an announcement
+ * whose answer from architect reaches only the relay, never designer; designer
+ * repeating one message is quarantined on the sixth send, the relay is told by
+ * guard over the channel, peers marks designer quarantined, the watcher's audit
+ * feed shows the five delivered repeats, designer cannot release itself
+ * (unauthorized), the relay releases it and designer can send again.
  *
  * On failure the thrown error carries the original message and every edge's
  * stderr, with the original error as cause. In every case it then closes all
@@ -195,11 +198,12 @@ export async function runScenario(log: (line: string) => void = () => undefined)
         `${e.name} registered as ${String(res['name'])}: ${JSON.stringify(res)}`,
       );
     }
-    await waitFor(
-      () => designer.notifications.some((x) => x.content.startsWith('peer identified: architect')),
-      "the architect's identification to reach the designer",
+    await new Promise((r) => setTimeout(r, 200));
+    expect(
+      designer.notifications.length === 0,
+      `joining and identifying woke nobody: ${JSON.stringify(designer.notifications)}`,
     );
-    log('three agents identified without passing a session id');
+    log('three agents identified without passing a session id, waking nobody');
 
     const strangerPeers = (await stranger.call('peers'))['peers'] as unknown[];
     expect(strangerPeers.length === 0, 'stranger sees nobody');
@@ -221,7 +225,16 @@ export async function runScenario(log: (line: string) => void = () => undefined)
       "architect's channel notification",
     );
     const n = architect.notifications.find(isMessage)!;
-    expect(n.content.includes('designer → you (expects reply)'), `channel content: ${n.content}`);
+    expect(
+      n.meta['from'] === 'designer' &&
+        n.meta['expectation'] === 'reply' &&
+        n.meta['kind'] === 'direct',
+      `channel meta: ${JSON.stringify(n.meta)}`,
+    );
+    expect(
+      n.content === '«Caching»\n\nShould the cache be per tenant?',
+      `channel content: ${n.content}`,
+    );
     expect(
       n.meta['conversation_id'] === asked['conversation_id'],
       'channel meta carries the conversation',
@@ -256,11 +269,17 @@ export async function runScenario(log: (line: string) => void = () => undefined)
       (broadcast['delivered_to'] as string[]).join() === 'designer',
       'broadcast reaches designer only',
     );
-    await waitFor(
-      () => designer.notifications.some((x) => x.content.includes('Heads up')),
-      "designer's broadcast notification",
+    await new Promise((r) => setTimeout(r, 200));
+    expect(
+      !designer.notifications.some((x) => x.content.includes('Heads up')),
+      'information between agents does not wake the designer',
     );
-    log('broadcast stayed inside the workspace');
+    const waitingFyi = (await designer.call('inbox'))['messages'] as { body: string }[];
+    expect(
+      waitingFyi.some((m) => m.body.includes('Heads up')),
+      `the fyi waits for the designer's next turn: ${JSON.stringify(waitingFyi)}`,
+    );
+    log('broadcast stayed inside the workspace and woke nobody');
 
     const relay = await openEdge('alice', 'ws1', env);
     const watcher = await openEdge('watcher', 'ws1', env);
@@ -279,6 +298,37 @@ export async function runScenario(log: (line: string) => void = () => undefined)
       "the relay's notice that a watcher registered",
     );
     const cursor = (await watcher.call('audit', { action: 'feed' }))['cursor'];
+
+    const pull = await relay.call('send', {
+      to: '*',
+      body: 'Pull your repository.',
+      expectation: 'reply',
+    });
+    expect(
+      pull['kind'] === 'announcement',
+      `a send to * is an announcement: ${JSON.stringify(pull)}`,
+    );
+    await waitFor(
+      () => designer.notifications.some((x) => x.content.includes('Pull your repository.')),
+      "the designer's copy of the announcement",
+    );
+    const pulled = await architect.call('reply', {
+      conversation_id: pull['conversation_id'],
+      body: 'Pulled.',
+    });
+    expect(
+      (pulled['delivered_to'] as string[]).join() === 'alice',
+      `an answer to an announcement reaches only its starter: ${JSON.stringify(pulled)}`,
+    );
+    await waitFor(
+      () => relay.notifications.some((x) => x.content.includes('Pulled.')),
+      "the relay's copy of the answer",
+    );
+    expect(
+      !designer.notifications.some((x) => x.content.includes('Pulled.')),
+      'the other recipients never see the answer',
+    );
+    log('an announcement collects answers at its starter only');
 
     let blocked: Record<string, unknown> = {};
     for (let i = 0; i < 6; i++) {

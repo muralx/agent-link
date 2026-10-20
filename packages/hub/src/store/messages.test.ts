@@ -205,27 +205,6 @@ test('inbox returns unread messages and marks them read', () => {
   assert.equal(messages.deliveryState(first[0]!.id, b.id)?.via, 'inbox');
 });
 
-test('pendingForHook surfaces queued messages once, then nags twice after 60 s', () => {
-  const { messages, a, b } = setup();
-  const t0 = Date.parse('2026-10-10T12:00:00.000Z');
-  const iso = (ms: number) => new Date(t0 + ms).toISOString();
-  const m = messages.send({ fromId: a.id, to: ['b'], body: 'q', expectation: 'reply' });
-  assert.equal(messages.pendingForHook(b.id, iso(0)).length, 1);
-  let d = messages.deliveryState(m.message_id, b.id)!;
-  assert.equal(d.state, 'notified');
-  assert.equal(d.nag_count, 0);
-  assert.equal(messages.pendingForHook(b.id, iso(1_000)).length, 0);
-  assert.equal(messages.pendingForHook(b.id, iso(61_000)).length, 1);
-  d = messages.deliveryState(m.message_id, b.id)!;
-  assert.equal(d.nag_count, 1);
-  assert.equal(d.notified_at, iso(61_000));
-  assert.equal(messages.pendingForHook(b.id, iso(100_000)).length, 0);
-  assert.equal(messages.pendingForHook(b.id, iso(122_000)).length, 1);
-  assert.equal(messages.pendingForHook(b.id, iso(300_000)).length, 0);
-  messages.markRead(b.id, [m.message_id], 'inbox');
-  assert.equal(messages.pendingForHook(b.id, iso(1_000_000)).length, 0);
-});
-
 test('open expectations are derived from who posted after whom', () => {
   const { messages, a, b } = setup();
   const q = messages.send({ fromId: a.id, to: ['b'], body: 'q', expectation: 'reply' });

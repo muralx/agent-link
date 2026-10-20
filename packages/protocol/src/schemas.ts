@@ -54,9 +54,11 @@ export const AgentStatusSchema = z.enum(['online', 'offline']);
 export type AgentStatus = z.infer<typeof AgentStatusSchema>;
 
 /**
- * DeliveryStateSchema tracks one recipient's copy of a message: queued on send,
- * notified once a channel notification or hook surfaced it, read once the agent
- * fetched it or replied in the conversation.
+ * DeliveryStateSchema tracks one recipient's copy of a message: queued on send
+ * (not shown to the recipient yet), notified once a channel notification put
+ * it in the recipient's context, read once a hook showed it in full, the agent
+ * fetched it or replied in the conversation. Only queued messages count as
+ * unread for inbox and conversation summaries.
  */
 export const DeliveryStateSchema = z.enum(['queued', 'notified', 'read']);
 /** DeliveryState is the parsed form of DeliveryStateSchema. */
@@ -172,13 +174,28 @@ export const MessageSchema = z.object({
 export type Message = z.infer<typeof MessageSchema>;
 
 /**
+ * ConversationKindSchema decides who receives a message posted into an
+ * existing conversation. direct: two participants, each reaches the other.
+ * announcement: started to several peers or '*'; the starter's messages reach
+ * everyone, anyone else's reach only the starter. group: every message reaches
+ * every other participant. The first send fixes the kind (one recipient is
+ * direct, several or '*' an announcement unless group is set); adding a
+ * participant to a direct conversation makes it a group.
+ */
+export const ConversationKindSchema = z.enum(['direct', 'announcement', 'group']);
+/** ConversationKind is the parsed form of ConversationKindSchema. */
+export type ConversationKind = z.infer<typeof ConversationKindSchema>;
+
+/**
  * ConversationSchema is a conversation's header; participants are listed
- * separately because they can grow after creation.
+ * separately because they can grow after creation. kind defaults to group so
+ * answers from a hub that predates kinds still parse.
  */
 export const ConversationSchema = z.object({
   id: z.string(),
   workspace: z.string(),
   subject: z.string().nullable(),
+  kind: ConversationKindSchema.default('group'),
   created_by: z.string(),
   created_at: z.string(),
 });
@@ -202,12 +219,13 @@ export type OpenExpectation = z.infer<typeof OpenExpectationSchema>;
 
 /**
  * ConversationSummarySchema is one row of the conversations tool: header fields
- * plus the caller's unread count and open_for_me, the expectations waiting on
- * the caller.
+ * (kind included) plus the caller's unread count, the messages not yet shown to
+ * it, and open_for_me, the expectations waiting on the caller.
  */
 export const ConversationSummarySchema = z.object({
   id: z.string(),
   subject: z.string().nullable(),
+  kind: ConversationKindSchema.default('group'),
   participants: z.array(z.string()),
   last_message_at: z.string().nullable(),
   unread: z.number().int().nonnegative(),
@@ -248,6 +266,8 @@ export type Recipients = z.infer<typeof RecipientsSchema>;
 /**
  * SendInputSchema is the send tool's input; to is required when no
  * conversation_id is given, expectation defaults to none and final to false.
+ * group, when starting a conversation with several recipients, makes it a
+ * group (every reply reaches everyone) instead of an announcement.
  */
 export const SendInputSchema = z
   .object({
@@ -258,6 +278,7 @@ export const SendInputSchema = z
     conversation_id: z.string().optional(),
     in_reply_to: z.string().optional(),
     final: z.boolean().default(false),
+    group: z.boolean().optional(),
   })
   .refine((v) => v.to !== undefined || v.conversation_id !== undefined, {
     message: 'to is required when starting a conversation',
@@ -370,12 +391,14 @@ export type RegisterResponse = z.infer<typeof RegisterResponseSchema>;
 
 /**
  * SendResponseSchema reports a successful send: the new message and
- * conversation ids, which recipients were online (delivered_to) and which
- * existing participants were offline.
+ * conversation ids, the conversation's kind (absent from a hub that predates
+ * kinds), which recipients were online (delivered_to) and which were offline;
+ * together they are exactly who received this message.
  */
 export const SendResponseSchema = z.object({
   message_id: z.string(),
   conversation_id: z.string(),
+  kind: ConversationKindSchema.optional(),
   delivered_to: z.array(z.string()),
   offline: z.array(z.string()),
 });
@@ -525,14 +548,21 @@ export type HealthResponse = z.infer<typeof HealthResponseSchema>;
 
 /**
  * MessageEventSchema is the SSE event the hub sends an edge for each inbound
- * message, with the conversation subject and participant names needed to render
- * it.
+ * message, with what the edge needs to render it: the conversation subject,
+ * participant names, kind and starter (an announcement's replies go to the
+ * starter only). wake is false for information an agent sent another agent
+ * (expectation none, neither side human): the edge then leaves it for the
+ * hooks instead of waking an idle window. kind and wake default so events from
+ * a hub that predates them still parse and behave as before.
  */
 export const MessageEventSchema = z.object({
   type: z.literal('message'),
   message: MessageSchema,
   subject: z.string().nullable(),
   participants: z.array(z.string()),
+  kind: ConversationKindSchema.default('group'),
+  starter: z.string().optional(),
+  wake: z.boolean().default(true),
 });
 /** MessageEvent is the parsed form of MessageEventSchema. */
 export type MessageEvent = z.infer<typeof MessageEventSchema>;

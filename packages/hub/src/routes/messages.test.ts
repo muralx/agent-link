@@ -74,7 +74,7 @@ test('send, inbox, thread, conversations and validation over http', async () => 
   });
 });
 
-test('open is read-only while pending marks notified; reclaim delivers what was missed', async () => {
+test('open is read-only while pending shows the message once; reclaim delivers what was missed', async () => {
   await withHub(async (hub, base) => {
     const a = await registerAgent(base, 'a');
     const b = await registerAgent(base, 'b');
@@ -90,7 +90,7 @@ test('open is read-only while pending marks notified; reclaim delivers what was 
       await fetch(`${base}/v1/sessions/${b.session}/pending`)
     ).json()) as PendingResponse;
     assert.equal(pending.messages.length, 1);
-    assert.equal(hub.stores.messages.deliveryState(q.data.message_id, b.id)?.state, 'notified');
+    assert.equal(hub.stores.messages.deliveryState(q.data.message_id, b.id)?.state, 'read');
 
     const del = await fetch(`${base}/v1/agents/${b.id}`, { method: 'DELETE', headers: auth(b) });
     assert.equal(del.status, 204);

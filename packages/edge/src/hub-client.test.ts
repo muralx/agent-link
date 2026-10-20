@@ -51,7 +51,9 @@ test('the client covers every route with validated results', async () => {
     assert.equal(open.agent?.name, 'b');
     assert.equal(open.open_replies.length, 1);
 
-    const inbox = await client.inbox(b.agent.id, b.token, { unread_only: true, limit: 10 });
+    const unread = await client.inbox(b.agent.id, b.token, { unread_only: true, limit: 10 });
+    assert.equal(unread.messages.length, 0, 'the hook already showed it');
+    const inbox = await client.inbox(b.agent.id, b.token, { unread_only: false, limit: 10 });
     assert.equal(inbox.messages.length, 1);
     const thread = await client.conversation(b.token, sent.conversation_id);
     assert.equal(thread.messages.length, 1);

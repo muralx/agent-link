@@ -24,14 +24,15 @@ Claude Code session ──stdio MCP──▶ agent-link-edge ──HTTP + SSE─
   enabled repository it starts the hub if none is running and registers the window
   **provisionally** the moment it loads, so peers can already write to it; the model then
   identifies itself with `register`. It exposes the tools (`register`, `peers`, `send`,
-  `reply`, `await`, `inbox`, `conversation`, `conversations`, `unregister`), acts as a Claude
-  Code **channel** so inbound messages wake an idle agent, and doubles as the hook binary.
+  `reply`, `await`, `inbox`, `conversation`, `conversations`, `unregister`, `guard`, `audit`), acts as a Claude
+  Code **channel** so questions wake an idle agent, and doubles as the hook binary.
   Outside enabled repositories it is dormant.
 - **agent-linkd** runs once per machine. It owns the SQLite store
   (`~/.local/share/agent-link/agent-link.db`), enforces workspace visibility and name
   uniqueness, routes messages and tracks presence and delivery state.
 - **Conversations are the primitive.** Every message belongs to one. The only typed field is
-  the sender's expectation: `reply`, `none` or `updates`.
+  the sender's expectation: `reply`, `none` or `updates`. A conversation's kind (direct,
+  announcement or group) decides who receives each later message; see below.
 - **The window owns the agent.** `/clear` and `/resume` change the session id, not the agent:
   its name and mailbox follow the window, and the SessionStart hook tells the model who it is.
 
@@ -43,7 +44,7 @@ pnpm, Claude Code 2.1.232 or newer.
 ```bash
 git clone https://github.com/muralx/agent-link.git && cd agent-link
 pnpm install
-pnpm test                      # 120+ tests, all local
+pnpm test                      # 130+ tests, all local
 pnpm link:bins                 # symlinks agent-linkd and agent-link-edge into ~/.local/bin
 claude plugin marketplace add "$PWD"
 claude plugin install agent-link@agent-link --scope user
@@ -93,6 +94,32 @@ verbatim and relays what you type; if the flag is missing it tells you so, since
 would otherwise sit unseen until you typed something. Agents see `kind: human` in `peers` and are told to ask you for decisions, not for
 things they can resolve alone.
 
+## Conversations and delivery
+
+Every message an agent receives stays in its context for the rest of the session, and every
+push wakes an idle window, which then rereads that whole context. agent-link keeps both to what
+the recipient needs.
+
+| The first `send` goes to         | Kind         | Who receives each later message                                             |
+| -------------------------------- | ------------ | --------------------------------------------------------------------------- |
+| one name                         | direct       | the other participant                                                       |
+| several names, or `*`            | announcement | the starter's messages reach everyone; anyone else's reach the starter only |
+| several names with `group: true` | group        | every other participant                                                     |
+
+A direct conversation that gains a third participant becomes a group. A participant reads only
+the messages it sent or received, so in an announcement nobody sees the other recipients'
+answers. Conversations created before kinds existed behave as groups.
+
+**Who is woken.** A question (`reply`) or a request for `updates` is pushed into the window
+at once. So is anything sent by or to a human. Information one agent sends another (`none`)
+is not pushed: a hook shows it in full at the recipient's next prompt or tool call. Peers
+joining or identifying themselves are not pushed at all; `peers` shows who is online.
+
+**Nothing is shown twice.** A pushed message carries the subject and body, with sender,
+expectation, kind and ids as attributes of its tag. A hook shows waiting messages in full and
+marks them read, once. `inbox` returns only messages not shown yet, and a reply that `await`
+returns is not pushed as well. Tool results are compact JSON; `register` lists peer names only.
+
 `/agent-link:peers` in any window lists who is online in its workspace. Claude Code's own
 `/list-agents` is a different thing: it lists every Claude session on the machine and knows
 nothing about workspaces.
@@ -117,7 +144,8 @@ under that name). In the relay window you type "release architect", "quarantine 
 automatic rules off; manual quarantines still hold.
 
 The `audit` tool shows a human relay, or a watcher, every conversation of the workspace without
-marking anything read: "show me what they are saying" in the relay window.
+marking anything read: "show me what they are saying" in the relay window. Its message feed
+shows the first 400 characters of each body; a conversation is shown in full.
 
 For judgement the rules cannot make (one agent telling another to do something destructive,
 answering for you, impersonating a peer), open one more window with the flag and run

@@ -116,3 +116,42 @@ test('await returns immediately on existing unread, waits for new, and times out
     assert.ok(clamped instanceof Error, 'a clamped 25 s wait is still longer than 500 ms');
   });
 });
+
+test('message events say who to wake: fyi between agents waits, questions and humans wake', async () => {
+  await withHub(
+    async (_hub, base) => {
+      const a = await registerAgent(base, 'a');
+      const b = await registerAgent(base, 'b');
+      const h = await registerAgent(base, 'h', 'w', { kind: 'human' });
+      const toB = await openStream(base, b);
+      const toH = await openStream(base, h);
+      const wake = async (stream: Awaited<ReturnType<typeof openStream>>) => {
+        const [frame] = await stream.next(1);
+        const data = frame?.data as HubEvent;
+        assert.equal(data.type, 'message');
+        return data.type === 'message' ? data.wake : undefined;
+      };
+
+      await send(base, a, { to: ['b'], body: 'fyi', expectation: 'none' });
+      assert.equal(await wake(toB), false, 'fyi from an agent to an agent does not wake');
+      await send(base, a, { to: ['b'], body: 'question', expectation: 'reply' });
+      assert.equal(await wake(toB), true, 'a question wakes');
+      await send(base, h, { to: ['b'], body: 'pull', expectation: 'none' });
+      assert.equal(await wake(toB), true, 'a human always wakes');
+      await send(base, a, { to: ['h'], body: 'fyi human', expectation: 'none' });
+      assert.equal(await wake(toH), true, 'a human relay is always woken');
+
+      const announced = await send(base, a, { to: ['b', 'h'], body: 'all', expectation: 'none' });
+      const [frame] = await toB.next(1);
+      const data = frame?.data as HubEvent;
+      if (data.type === 'message') {
+        assert.equal(data.kind, 'announcement');
+        assert.equal(data.starter, 'a');
+      }
+      assert.equal(announced.data.kind, 'announcement');
+      toB.close();
+      toH.close();
+    },
+    { keepaliveMs: 60_000 },
+  );
+});

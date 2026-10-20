@@ -1,7 +1,7 @@
 import type { Agent, GuardRule, Incident } from '@agent-link/protocol';
 import type { HubDeps } from './deps.ts';
 import { HubError } from './store/errors.ts';
-import type { QueuedMessage } from './store/messages.ts';
+import { wakes, type QueuedMessage } from './store/messages.ts';
 import type { SendAttempt } from './store/guard.ts';
 
 /**
@@ -14,7 +14,8 @@ export function auditKey(workspace: string): string {
 
 /**
  * publishMessage fans a stored message out as a message event to its
- * recipients and to the workspace's audit feed.
+ * recipients, each with its own wake flag (see wakes), and to the workspace's
+ * audit feed.
  */
 export function publishMessage(
   deps: HubDeps,
@@ -27,8 +28,17 @@ export function publishMessage(
     message: queued.message,
     subject: queued.subject,
     participants: queued.participants,
+    kind: queued.kind,
+    starter: queued.starter,
+    wake: true,
   };
-  deps.bus.publishAll(recipientIds, event);
+  for (const id of recipientIds) {
+    const toKind = deps.stores.agents.byId(id)?.kind ?? 'agent';
+    deps.bus.publish(id, {
+      ...event,
+      wake: wakes(queued.message.expectation, queued.fromKind, toKind),
+    });
+  }
   deps.bus.publish(auditKey(workspace), event);
 }
 

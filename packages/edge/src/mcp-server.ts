@@ -99,13 +99,15 @@ export interface EdgeServer {
  * tools and the experimental claude/channel capability, the
  * SERVER_INSTRUCTIONS, tools/list from toolListing and tools/call through
  * callTool (progress notifications when the request carries a progressToken,
- * abort via the request signal). It reads CLAUDE_CODE_SESSION_ID and
- * CLAUDE_PROJECT_DIR from the environment for the edge's own session id and
- * provisional name. After any successful registration (start or the register
- * tool) it (re)starts the SSE subscription that feeds emitChannel with
- * options.channel: when that is false no notification is emitted and deliveries
- * stay queued for the hooks. It does not connect a transport; the caller does,
- * then calls start().
+ * abort via the request signal). Tool results are serialised as compact JSON.
+ * It reads CLAUDE_CODE_SESSION_ID and CLAUDE_PROJECT_DIR from the environment
+ * for the edge's own session id and provisional name. After any successful
+ * registration (start or the register tool) it (re)starts the SSE subscription
+ * that feeds emitChannel with options.channel and the session's awaited check:
+ * when channel is false no notification is emitted and deliveries stay queued
+ * for the hooks, and a message an await returns, or will return, is not pushed
+ * as well. It does not connect a transport; the caller does, then calls
+ * start().
  */
 export function createEdgeServer(options: EdgeServerOptions): EdgeServer {
   const session = new EdgeSession();
@@ -124,7 +126,9 @@ export function createEdgeServer(options: EdgeServerOptions): EdgeServer {
     session.replaceSubscription(
       options.client.subscribeEvents(identity.agentId, identity.token, {
         onEvent: (event) => {
-          emitChannel(server, options.client, identity, event, options.channel).catch(onError);
+          emitChannel(server, options.client, identity, event, options.channel, (e) =>
+            session.awaited(e.message.conversation_id, e.message.id),
+          ).catch(onError);
         },
         onError,
       }),
@@ -191,7 +195,7 @@ export function createEdgeServer(options: EdgeServerOptions): EdgeServer {
         signal: extra.signal,
       });
       return {
-        content: [{ type: 'text', text: JSON.stringify(outcome.result, null, 2) }],
+        content: [{ type: 'text', text: JSON.stringify(outcome.result) }],
         isError: outcome.isError,
       };
     },

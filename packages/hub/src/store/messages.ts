@@ -1,7 +1,9 @@
 import type { DatabaseSync } from 'node:sqlite';
 import {
   newId,
+  type AgentKind,
   type Conversation,
+  type ConversationKind,
   type ConversationSummary,
   type DeliveryState,
   type DeliveryVia,
@@ -16,17 +18,10 @@ import { now } from './db.ts';
 import { HubError } from './errors.ts';
 
 /**
- * NAG_AFTER_MS is how long a notified-but-unread delivery waits before a hook
- * surfaces it again (60 s).
- */
-export const NAG_AFTER_MS = 60_000;
-/** MAX_NAGS caps how many times a hook re-surfaces an unread delivery (2). */
-export const MAX_NAGS = 2;
-
-/**
  * SendParams is the store-level input of send: sender id, recipients by name or
- * '*', body, expectation and the optional thread, in_reply_to override, subject
- * and final flag.
+ * '*', body, expectation and the optional thread, in_reply_to override, subject,
+ * final flag and group (a new conversation with several recipients becomes a
+ * group instead of an announcement).
  */
 export interface SendParams {
   fromId: string;
@@ -37,16 +32,33 @@ export interface SendParams {
   conversationId?: string | undefined;
   inReplyTo?: string | undefined;
   final?: boolean | undefined;
+  /**
+   * group, when the send starts a conversation with several recipients, makes
+   * it a group instead of an announcement; ignored otherwise.
+   */
+  group?: boolean | undefined;
 }
 
 /**
  * SendResult extends the protocol's SendResponse with the stored Message, the
- * recipient ids to publish to, and the subject and participant names for the
- * event payload.
+ * recipient ids to publish to, and the subject, participant names, starter name
+ * and sender kind for the event payload.
  */
 export interface SendResult {
   message_id: string;
   conversation_id: string;
+  /**
+   * kind is the conversation's kind after this send (a direct conversation may
+   * just have become a group).
+   */
+  kind: ConversationKind;
+  /** starter is the name of the agent that started the conversation. */
+  starter: string;
+  /**
+   * fromKind is the sender's kind, which decides with each recipient's whether
+   * the event wakes it.
+   */
+  fromKind: AgentKind;
   delivered_to: string[];
   offline: string[];
   message: Message;
@@ -64,11 +76,25 @@ export interface Delivery {
   nag_count: number;
 }
 
-/** QueuedMessage is a message with the context an SSE message event carries. */
+/**
+ * QueuedMessage is a message with the context an SSE message event carries:
+ * subject, participant names, the conversation's kind, the name of the agent
+ * that started it (who an announcement's replies go to) and the sender's kind,
+ * which decides with the recipient's whether the event wakes it (wakes).
+ */
 export interface QueuedMessage {
   message: Message;
   subject: string | null;
   participants: string[];
+  /** kind is the kind of the message's conversation. */
+  kind: ConversationKind;
+  /**
+   * starter is the name of the agent that started the conversation, empty when
+   * it no longer exists.
+   */
+  starter: string;
+  /** fromKind is the sender's kind (agent or human). */
+  fromKind: AgentKind;
 }
 
 /**
@@ -91,8 +117,8 @@ export interface UnreadFilter {
 }
 
 /**
- * MessageRow is the raw row shape produced by MESSAGE_SELECT; exported for
- * AuditStore, which runs its own message queries.
+ * MessageRow is the raw row shape produced by MESSAGE_SELECT, the sender's kind
+ * included; exported for AuditStore, which runs its own message queries.
  */
 export interface MessageRow {
   id: string;
@@ -104,16 +130,35 @@ export interface MessageRow {
   final: number;
   in_reply_to: string | null;
   created_at: string;
+  /** from_kind is the sender's kind from the agent table. */
+  from_kind: AgentKind;
 }
 
 /**
  * MESSAGE_SELECT is the shared SELECT ... FROM message JOIN agent prefix that
- * yields MessageRow columns; exported for AuditStore.
+ * yields MessageRow columns, the sender's name and kind included; exported for
+ * AuditStore.
  */
 export const MESSAGE_SELECT = `
   SELECT m.id, m.conversation_id, a.name AS from_name, m.to_names, m.body, m.expectation,
-         m.final, m.in_reply_to, m.created_at
+         m.final, m.in_reply_to, m.created_at, a.kind AS from_kind
   FROM message m JOIN agent a ON a.id = m.from_agent`;
+
+/**
+ * wakes decides whether a message event should wake its recipient's window: a
+ * question or a request for updates always does, and so does anything to or
+ * from a human; information one agent sends another (expectation none) waits
+ * for the recipient's next turn, where a hook shows it.
+ */
+export function wakes(expectation: Expectation, fromKind: AgentKind, toKind: AgentKind): boolean {
+  return expectation !== 'none' || fromKind === 'human' || toKind === 'human';
+}
+
+/**
+ * VISIBLE is the SQL condition, over message m, that keeps the messages a
+ * participant sent or received; it takes the agent id twice.
+ */
+const VISIBLE = `(m.from_agent = ? OR EXISTS (SELECT 1 FROM delivery v WHERE v.message_id = m.id AND v.to_agent = ?))`;
 
 /**
  * toMessage maps a MessageRow to the protocol Message, parsing to_names and the
@@ -137,7 +182,7 @@ export function toMessage(row: MessageRow): Message {
  * MessageStore owns the message and delivery tables and implements the
  * conversation rules of the spec: sending (new thread or reply, name
  * resolution, offline participants), system notices that bypass those rules
- * (post), per-recipient delivery state (queued, notified, read), hook nagging,
+ * (post), per-recipient delivery state (queued, notified, read), what hooks show,
  * open expectations and the unread queries behind await. All multi-row writes
  * in send and post run in one SQLite transaction.
  */
@@ -186,12 +231,12 @@ export class MessageStore {
 
   /**
    * post writes a system message outside the rules of send: it starts a new
-   * conversation in workspace with the given subject between fromId and
+   * announcement in workspace with the given subject between fromId and
    * recipientIds, stores body with expectation none and queues one delivery per
    * recipient, online or not. The guard uses it for its notices, whose sender
    * is the offline system agent and whose recipients may be away. Returns the
-   * stored message with its event context, or undefined when there is nobody
-   * to tell.
+   * stored message with its event context, or undefined when there is nobody to
+   * tell.
    */
   post(params: {
     workspace: string;
@@ -207,6 +252,7 @@ export class MessageStore {
         workspace: params.workspace,
         createdBy: params.fromId,
         subject: params.subject,
+        kind: 'announcement',
         participantIds: [params.fromId, ...params.recipientIds],
       });
       const names = this.#conversations
@@ -228,7 +274,7 @@ export class MessageStore {
       const row = this.#db
         .prepare(`${MESSAGE_SELECT} WHERE m.id = ?`)
         .get(id) as unknown as MessageRow;
-      return this.withContext(toMessage(row));
+      return this.withContext(toMessage(row), row.from_kind);
     } catch (err) {
       this.#db.exec('ROLLBACK');
       throw err;
@@ -236,11 +282,14 @@ export class MessageStore {
   }
 
   /**
-   * inbox returns the agent's messages in creation order, only unread ones when
-   * unreadOnly, at most limit, and marks the returned ones read via inbox.
+   * inbox returns the agent's messages in creation order, at most limit, and
+   * marks the returned ones read via inbox. With unreadOnly it returns only
+   * the messages not shown to the agent yet (still queued): what a channel
+   * notification or a hook already put in its context is left out, so nothing
+   * is read twice.
    */
   inbox(agentId: string, options: { unreadOnly: boolean; limit: number }): Message[] {
-    const filter = options.unreadOnly ? "AND d.state != 'read'" : '';
+    const filter = options.unreadOnly ? "AND d.state = 'queued'" : '';
     const rows = this.#db
       .prepare(
         `${MESSAGE_SELECT} JOIN delivery d ON d.message_id = m.id
@@ -271,30 +320,25 @@ export class MessageStore {
   }
 
   /**
-   * pendingForHook returns what a hook should surface at nowIso: queued
-   * deliveries, plus notified ones older than NAG_AFTER_MS with fewer than
-   * MAX_NAGS nags. Each returned delivery becomes notified via hook with
-   * notified_at = nowIso and its nag_count reset to 0 (from queued) or
-   * incremented.
+   * pendingForHook returns the messages a hook should show in full at nowIso:
+   * the agent's deliveries not shown yet (still queued), oldest first. Each
+   * returned delivery becomes read via hook at nowIso, since the hook puts the
+   * whole message in the agent's context; nothing is shown twice. A question
+   * stays open until the agent posts in its conversation (openReplies), which
+   * is what the Stop hook checks.
    */
   pendingForHook(agentId: string, nowIso: string = now()): Message[] {
-    const threshold = new Date(Date.parse(nowIso) - NAG_AFTER_MS).toISOString();
     const rows = this.#db
       .prepare(
         `${MESSAGE_SELECT} JOIN delivery d ON d.message_id = m.id
-         WHERE d.to_agent = ?
-           AND (d.state = 'queued'
-                OR (d.state = 'notified' AND d.nag_count < ? AND d.notified_at < ?))
-         ORDER BY m.rowid`,
+         WHERE d.to_agent = ? AND d.state = 'queued' ORDER BY m.rowid`,
       )
-      .all(agentId, MAX_NAGS, threshold) as unknown as MessageRow[];
+      .all(agentId) as unknown as MessageRow[];
     const update = this.#db.prepare(
-      `UPDATE delivery SET via = 'hook', notified_at = ?,
-         nag_count = CASE WHEN state = 'queued' THEN 0 ELSE nag_count + 1 END,
-         state = 'notified'
+      `UPDATE delivery SET state = 'read', via = 'hook', notified_at = ?, read_at = ?
        WHERE to_agent = ? AND message_id = ?`,
     );
-    for (const row of rows) update.run(nowIso, agentId, row.id);
+    for (const row of rows) update.run(nowIso, nowIso, agentId, row.id);
     return rows.map(toMessage);
   }
 
@@ -353,16 +397,17 @@ export class MessageStore {
 
   /**
    * listForAgent summarises every conversation the agent participates in
-   * (participants, last activity, unread count, expectations open for it),
+   * (kind, participants, last activity, unread count of messages not shown to
+   * it yet, expectations open for it),
    * newest first; openOnly keeps only those with something open.
    */
   listForAgent(agentId: string, openOnly: boolean): ConversationSummary[] {
     const convs = this.#db
       .prepare(
-        `SELECT c.id, c.subject FROM conversation c JOIN participant p ON p.conversation_id = c.id
+        `SELECT c.id, c.subject, c.kind FROM conversation c JOIN participant p ON p.conversation_id = c.id
          WHERE p.agent_id = ?`,
       )
-      .all(agentId) as unknown as { id: string; subject: string | null }[];
+      .all(agentId) as unknown as { id: string; subject: string | null; kind: ConversationKind }[];
     const open = this.openForMe(agentId);
     const summaries = convs.map((c): ConversationSummary => {
       const last = this.#db
@@ -371,12 +416,13 @@ export class MessageStore {
       const unread = this.#db
         .prepare(
           `SELECT COUNT(*) AS n FROM delivery d JOIN message m ON m.id = d.message_id
-           WHERE d.to_agent = ? AND d.state != 'read' AND m.conversation_id = ?`,
+           WHERE d.to_agent = ? AND d.state = 'queued' AND m.conversation_id = ?`,
         )
         .get(agentId, c.id) as { n: number };
       return {
         id: c.id,
         subject: c.subject,
+        kind: c.kind,
         participants: this.#conversations.participants(c.id).map((p) => p.name),
         last_message_at: last.t,
         unread: unread.n,
@@ -390,10 +436,12 @@ export class MessageStore {
   }
 
   /**
-   * thread returns a conversation's messages in order, or only those after the
-   * since message id (not_found if it is not in the thread), and marks the
-   * returned ones read via conversation; not_found for an unknown conversation
-   * and not_participant for an outsider.
+   * thread returns the conversation's messages the agent sent or received, in
+   * order, or only those after the since message id (not_found if it is not in
+   * the thread), and marks the returned ones read via conversation; not_found
+   * for an unknown conversation and not_participant for an outsider. In an
+   * announcement a recipient therefore sees the starter's messages and its own,
+   * never the other recipients' replies.
    */
   thread(agentId: string, conversationId: string, since?: string): Thread {
     const conversation = this.#conversations.get(conversationId);
@@ -409,12 +457,14 @@ export class MessageStore {
         .get(since, conversationId) as { r: number } | undefined;
       if (!anchor) throw new HubError('not_found', `message ${since} is not in this conversation`);
       rows = this.#db
-        .prepare(`${MESSAGE_SELECT} WHERE m.conversation_id = ? AND m.rowid > ? ORDER BY m.rowid`)
-        .all(conversationId, anchor.r) as unknown as MessageRow[];
+        .prepare(
+          `${MESSAGE_SELECT} WHERE m.conversation_id = ? AND m.rowid > ? AND ${VISIBLE} ORDER BY m.rowid`,
+        )
+        .all(conversationId, anchor.r, agentId, agentId) as unknown as MessageRow[];
     } else {
       rows = this.#db
-        .prepare(`${MESSAGE_SELECT} WHERE m.conversation_id = ? ORDER BY m.rowid`)
-        .all(conversationId) as unknown as MessageRow[];
+        .prepare(`${MESSAGE_SELECT} WHERE m.conversation_id = ? AND ${VISIBLE} ORDER BY m.rowid`)
+        .all(conversationId, agentId, agentId) as unknown as MessageRow[];
     }
     const messages = rows.map(toMessage);
     this.markRead(
@@ -461,8 +511,8 @@ export class MessageStore {
 
   /**
    * queuedFor returns the agent's still-queued messages, oldest first, each
-   * with the subject and participant names an SSE message event needs; used to
-   * replay on stream connect.
+   * with the event context withContext adds (subject, participant names, kind,
+   * starter, sender kind); used to replay on stream connect.
    */
   queuedFor(agentId: string): QueuedMessage[] {
     const rows = this.#db
@@ -471,19 +521,24 @@ export class MessageStore {
          WHERE d.to_agent = ? AND d.state = 'queued' ORDER BY m.rowid`,
       )
       .all(agentId) as unknown as MessageRow[];
-    return rows.map((row) => this.withContext(toMessage(row)));
+    return rows.map((row) => this.withContext(toMessage(row), row.from_kind));
   }
 
   /**
-   * withContext attaches the conversation subject and participant names to a
-   * message, the payload shape of an SSE message event.
+   * withContext attaches the conversation subject, participant names, kind and
+   * starter name, and the given sender kind, to a message: the payload an SSE
+   * message event is built from. A conversation that no longer exists gives a
+   * null subject, kind group and an empty starter.
    */
-  withContext(message: Message): QueuedMessage {
+  withContext(message: Message, fromKind: AgentKind): QueuedMessage {
     const conversation = this.#conversations.get(message.conversation_id);
     return {
       message,
       subject: conversation?.subject ?? null,
       participants: this.#conversations.participants(message.conversation_id).map((p) => p.name),
+      kind: conversation?.kind ?? 'group',
+      starter: conversation ? (this.#agents.byId(conversation.created_by)?.name ?? '') : '',
+      fromKind,
     };
   }
 
@@ -550,18 +605,22 @@ export class MessageStore {
    * The sender must be an online agent (not_registered otherwise). With a
    * conversationId, the conversation must exist in the sender's workspace
    * (not_found) and the sender must be a participant (not_participant); any to
-   * names, or "*" for every online peer, are added as participants, the
-   * recipients are every other participant, and the sender's unread deliveries
-   * in that conversation are marked read, since posting counts as having read
-   * the thread. Without a conversationId, to is required (invalid_message),
-   * recipients are the resolved names or every online peer, an empty set is
-   * peer_not_found with extra.online set to [], and a new conversation with the
-   * optional subject is created around sender and recipients. in_reply_to
+   * names, or "*" for every online peer, are added as participants (a direct
+   * conversation that grows past two becomes a group); the recipients are the
+   * starter alone when someone else posts into an announcement, otherwise every
+   * other participant; and the sender's unread deliveries in that conversation
+   * are marked read, since posting counts as having read the thread. Without a
+   * conversationId, to is required (invalid_message), recipients are the
+   * resolved names or every online peer, an empty set is peer_not_found with
+   * extra.online set to [], and a new conversation with the optional subject is
+   * created around sender and recipients: direct for one named recipient,
+   * otherwise an announcement, or a group when params.group. in_reply_to
    * defaults to the latest message from someone else in an existing
    * conversation, and to null for a new one. Deliveries are inserted for
    * offline participants too; the result splits recipient names into
    * delivered_to (online) and offline, and also carries the recipient ids,
-   * subject and participant names the caller needs to publish SSE events.
+   * kind, starter, sender kind, subject and participant names the caller needs
+   * to publish SSE events.
    */
   #sendInTransaction(params: SendParams): SendResult {
     const from = this.#agents.byId(params.fromId);
@@ -585,8 +644,18 @@ export class MessageStore {
             ? this.#agents.onlineIds(from.workspace, from.id)
             : this.#resolveNames(from.workspace, from.id, params.to);
         this.#conversations.addParticipants(existing.id, added);
+        if (
+          existing.kind === 'direct' &&
+          this.#conversations.participantIds(existing.id).length > 2
+        ) {
+          this.#conversations.setKind(existing.id, 'group');
+          existing.kind = 'group';
+        }
       }
-      recipientIds = this.#conversations.participantIds(existing.id).filter((id) => id !== from.id);
+      recipientIds =
+        existing.kind === 'announcement' && existing.created_by !== from.id
+          ? [existing.created_by]
+          : this.#conversations.participantIds(existing.id).filter((id) => id !== from.id);
       this.#markConversationRead(from.id, existing.id);
     } else {
       if (params.to === undefined) {
@@ -605,6 +674,12 @@ export class MessageStore {
         workspace: from.workspace,
         createdBy: from.id,
         subject: params.subject ?? null,
+        kind:
+          recipientIds.length === 1 && params.to !== '*'
+            ? 'direct'
+            : params.group
+              ? 'group'
+              : 'announcement',
         participantIds: [from.id, ...recipientIds],
       });
     }
@@ -656,6 +731,9 @@ export class MessageStore {
     return {
       message_id: id,
       conversation_id: conversation.id,
+      kind: conversation.kind,
+      starter: this.#agents.byId(conversation.created_by)?.name ?? '',
+      fromKind: from.kind,
       delivered_to: recipients.filter((r) => r.status === 'online').map((r) => r.name),
       offline: recipients.filter((r) => r.status !== 'online').map((r) => r.name),
       message,

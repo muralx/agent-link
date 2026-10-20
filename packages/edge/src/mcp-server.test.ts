@@ -114,10 +114,7 @@ test('two agents converse: send, inbox, reply, await; visibility is per workspac
   await withEdges(['w', 'w', 'other'], async ([architect, designer, stranger]) => {
     await architect!.register('architect');
     const reg = await designer!.register('designer');
-    assert.deepEqual(
-      (reg['peers'] as { name: string }[]).map((p) => p.name),
-      ['architect'],
-    );
+    assert.deepEqual(reg['peers'], ['architect'], 'register lists peer names only');
     await stranger!.register('stranger');
     assert.deepEqual(await stranger!.call('peers'), { peers: [] });
 
@@ -127,7 +124,7 @@ test('two agents converse: send, inbox, reply, await; visibility is per workspac
       expectation: 'reply',
     });
     assert.deepEqual(sent['delivered_to'], ['architect']);
-    const inbox = await architect!.call('inbox');
+    const inbox = await architect!.call('inbox', { unread_only: false });
     assert.equal(inbox['count'], 1);
     const convs = await architect!.call('conversations', { open_only: true });
     assert.equal((convs['conversations'] as unknown[]).length, 1);
@@ -185,16 +182,14 @@ test('an inbound message becomes a channel notification and is acked as notified
     });
     await waitFor(() => received.length >= 1);
     const n = received[0]!;
-    assert.match(
-      n.params.content,
-      /architect → you \(expects reply\) in conversation cv_\w+ «Caching»:\n\nPlease review/,
-    );
+    assert.equal(n.params.content, '«Caching»\n\nPlease review the cache design');
     assert.deepEqual(n.params.meta, {
       conversation_id: sent['conversation_id'],
       message_id: sent['message_id'],
       from: 'architect',
       expectation: 'reply',
       final: 'false',
+      kind: 'direct',
     });
     await waitFor(
       () =>
@@ -208,8 +203,8 @@ test('an inbound message becomes a channel notification and is acked as notified
 
     const third = await openEdge(hub.url!, 'w');
     await third.register('reviewer');
-    await waitFor(() => received.length >= 2);
-    assert.match(received[1]!.params.content, /^peer joined: reviewer/);
+    await new Promise((r) => setTimeout(r, 100));
+    assert.equal(received.length, 1, 'a peer joining is not pushed');
     await third.close();
   });
 });
@@ -278,12 +273,8 @@ test('start registers the window provisionally and the model upgrades the identi
     const row = hub.stores.agents.bySession('sess-real');
     assert.equal(row?.provisional, true);
     assert.equal(row?.window, 'win-1');
-    await waitFor(() => received.length >= 1);
-    assert.match(
-      received[0]!.params.content,
-      /^peer joined: My-Repo \(provisional, not yet identified\)/,
-    );
-    assert.equal(received[0]!.params.meta?.['provisional'], 'true');
+    await new Promise((r) => setTimeout(r, 100));
+    assert.equal(received.length, 0, 'a peer joining wakes nobody');
 
     const mine: z.infer<typeof ChannelNotificationSchema>[] = [];
     edge.client.setNotificationHandler(ChannelNotificationSchema, (n) => {
@@ -304,13 +295,10 @@ test('start registers the window provisionally and the model upgrades the identi
     assert.equal(identified['agent_id'], provisional?.agentId, 'same agent, no session_id needed');
     assert.equal(identified['name'], 'architect');
     assert.equal(hub.stores.agents.bySession('sess-real')?.provisional, false);
-    await waitFor(() => received.length >= 2);
-    assert.equal(
-      received[1]!.params.content,
-      'peer identified: architect (was My-Repo) — Designs the hub',
-    );
+    await new Promise((r) => setTimeout(r, 100));
+    assert.equal(received.length, 0, 'an identification wakes nobody either');
 
-    const inbox = await edge.call('inbox', {});
+    const inbox = await edge.call('inbox', { unread_only: false });
     assert.equal(
       (inbox['messages'] as unknown[]).length,
       1,
@@ -443,7 +431,7 @@ test("register upgrades the edge's own agent even after a hook relinked its sess
       undefined,
       'the placeholder was absorbed',
     );
-    const inbox = await relayNew.call('inbox', {});
+    const inbox = await relayNew.call('inbox', { unread_only: false });
     const messages = inbox['messages'] as { conversation_id: string; body: string }[];
     assert.equal(messages.length, 1);
     assert.equal(messages[0]!.conversation_id, asked['conversation_id']);
@@ -500,4 +488,55 @@ test('without the channels flag the edge emits nothing, keeps deliveries queued 
     await deaf.close();
     await hub.close();
   }
+});
+
+test('an answer that await returns is not pushed as well, and peers lists only what matters', async () => {
+  await withEdges(['w', 'w', 'w'], async ([architect, designer, relay]) => {
+    await architect!.register('architect');
+    await designer!.register('designer');
+    await relay!.call('register', {
+      session_id: relay!.sessionId,
+      name: 'dana',
+      kind: 'human',
+      description: 'the human',
+      capabilities: 'decide',
+    });
+    const pushed: z.infer<typeof ChannelNotificationSchema>[] = [];
+    designer!.client.setNotificationHandler(ChannelNotificationSchema, (n) => {
+      pushed.push(n);
+    });
+    const asked = await designer!.call('send', {
+      to: ['architect'],
+      body: 'Cache per tenant?',
+      expectation: 'reply',
+    });
+    const waiting = designer!.call('await', {
+      conversation_id: asked['conversation_id'],
+      timeout_s: 5,
+    });
+    await new Promise((r) => setTimeout(r, 50));
+    await architect!.call('reply', {
+      conversation_id: asked['conversation_id'],
+      body: 'Yes.',
+      expectation: 'reply',
+    });
+    const got = await waiting;
+    assert.equal((got['messages'] as { body: string }[])[0]?.body, 'Yes.');
+    await new Promise((r) => setTimeout(r, 100));
+    assert.equal(pushed.length, 0, 'the answer arrived once, through await');
+
+    const peers = (await designer!.call('peers'))['peers'] as Record<string, unknown>[];
+    assert.deepEqual(
+      peers.find((p) => p['name'] === 'architect'),
+      { name: 'architect', description: 'architect does things', capabilities: 'consult' },
+    );
+    assert.equal(peers.find((p) => p['name'] === 'dana')?.['kind'], 'human');
+    const again = await designer!.call('register', {
+      session_id: designer!.sessionId,
+      name: 'designer',
+      description: 'designer does things',
+      capabilities: 'consult',
+    });
+    assert.deepEqual(again['humans'], ['dana']);
+  });
 });

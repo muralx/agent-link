@@ -1,5 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { feedEntry, FEED_BODY_CHARS } from './tools.ts';
 import { openEdge, startTestHub, type TestEdge } from './testkit.ts';
 
 type Json = Record<string, unknown>;
@@ -77,7 +78,7 @@ test('guard and audit tools: quarantine by rule, status, human release, watcher 
     const asked = await watcher.call('guard', { action: 'request', name: 'b', reason: 'odd' });
     assert.equal(asked['action'], 'requested');
 
-    const notices = (await human.call('inbox'))['messages'] as Json[];
+    const notices = (await human.call('inbox', { unread_only: false }))['messages'] as Json[];
     assert.equal(
       notices.some(
         (m) => m['from'] === 'guard' && /quarantined by the guard/.test(String(m['body'])),
@@ -109,3 +110,28 @@ async function firstMessageId(observer: TestEdge): Promise<string | undefined> {
   });
   return (thread['messages'] as Json[])[0]?.['id'] as string | undefined;
 }
+
+test('the audit feed shows the start of each body and says when it cut one', () => {
+  const base = {
+    id: 'msg_1',
+    conversation_id: 'cv_1',
+    from: 'a',
+    to: ['b'],
+    expectation: 'none' as const,
+    final: false,
+    in_reply_to: null,
+    created_at: 't',
+  };
+  assert.deepEqual(feedEntry({ ...base, body: 'short' }), {
+    id: 'msg_1',
+    conversation_id: 'cv_1',
+    from: 'a',
+    to: ['b'],
+    expectation: 'none',
+    body: 'short',
+  });
+  const long = feedEntry({ ...base, body: 'x'.repeat(FEED_BODY_CHARS + 50), final: true });
+  assert.equal(long['body'], `${'x'.repeat(FEED_BODY_CHARS)}…`);
+  assert.equal(long['truncated'], true);
+  assert.equal(long['final'], true);
+});

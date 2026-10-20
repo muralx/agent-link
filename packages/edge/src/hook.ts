@@ -56,8 +56,6 @@ export const CHANNEL_WARNING =
  * stall the session.
  */
 export const HOOK_TIMEOUT_MS = 1500;
-/** EXCERPT_CHARS is the length of a message excerpt in hook text (200). */
-export const EXCERPT_CHARS = 200;
 
 /** SILENT is the hook result that prints nothing and succeeds. */
 const SILENT: HookResult = { stdout: '', exitCode: 0 };
@@ -115,28 +113,30 @@ export function isAgentLinkTool(toolName: string | undefined): boolean {
 }
 
 /**
- * excerpt flattens whitespace and truncates a body to EXCERPT_CHARS with an
- * ellipsis.
+ * describeExpectation maps an expectation to the phrase shown in a hook
+ * message header.
  */
-function excerpt(body: string): string {
-  const flat = body.replace(/\s+/g, ' ').trim();
-  return flat.length > EXCERPT_CHARS ? `${flat.slice(0, EXCERPT_CHARS - 1)}…` : flat;
+function describeExpectation(expectation: string): string {
+  if (expectation === 'reply') return 'expects a reply';
+  if (expectation === 'updates') return 'wants updates';
+  return 'fyi';
 }
 
 /**
- * describePending renders the hook text for waiting messages: a count, one line
- * per message (from, expectation, conversation, 200-char excerpt) and what to
- * do.
+ * describePending renders the hook text for messages not shown before, each in
+ * full under a header (from, expectation, conversation id, final), since the
+ * hub marks them read: there is nothing to fetch afterwards and nothing is
+ * shown twice.
  */
 export function describePending(messages: Message[]): string {
-  const lines = messages.map(
-    (m) => `- ${m.from} (${m.expectation}) in ${m.conversation_id}: ${excerpt(m.body)}`,
-  );
   const n = messages.length;
+  const blocks = messages.map(
+    (m) =>
+      `--- from ${m.from} (${describeExpectation(m.expectation)}) in ${m.conversation_id}${m.final ? ' [final]' : ''}:\n${m.body}`,
+  );
   return [
-    `agent-link: ${n} message${n === 1 ? '' : 's'} waiting for you.`,
-    ...lines,
-    'Read them with the inbox or conversation tool at the next natural point, and answer anything that expects a reply with the reply tool.',
+    `agent-link: ${n} message${n === 1 ? '' : 's'} for you, shown in full (no need to read them again with inbox). Answer with reply where a reply is expected.`,
+    ...blocks,
   ].join('\n');
 }
 

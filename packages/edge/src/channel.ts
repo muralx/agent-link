@@ -1,4 +1,4 @@
-import type { HubEvent } from '@agent-link/protocol';
+import type { HubEvent, MessageEvent } from '@agent-link/protocol';
 import type { HubClient } from './hub-client.ts';
 import type { Identity } from './session.ts';
 
@@ -29,53 +29,47 @@ export interface ChannelSink {
 }
 
 /**
- * describeExpectation maps an expectation to the short phrase shown in the
- * channel header.
+ * audience says, for the recipient me, who else got a message and where a
+ * reply would go: nothing in a direct conversation; in an announcement, the
+ * starter and the number of recipients with "your reply goes to <starter>
+ * only", or "reply to your announcement" when me is the starter; in a group,
+ * the other members and that replies reach everyone.
  */
-function describeExpectation(expectation: string): string {
-  switch (expectation) {
-    case 'reply':
-      return 'expects reply';
-    case 'updates':
-      return 'wants updates';
-    default:
-      return 'fyi';
+export function audience(event: MessageEvent, me: string): string | undefined {
+  const others = event.participants.filter((p) => p !== me);
+  if (event.kind === 'announcement') {
+    const starter = event.starter ?? event.message.from;
+    if (starter === me) return 'reply to your announcement';
+    const n = event.participants.filter((p) => p !== starter).length;
+    return `announcement from ${starter} to ${n} peers; your reply goes to ${starter} only`;
   }
+  if (event.kind === 'group') return `group with ${others.join(', ')}; replies reach everyone`;
+  return undefined;
 }
 
 /**
- * renderChannelContent formats the channel text: for a message, 'from → you
- * (expects reply | wants updates | fyi) in conversation id «subject» [final]:'
- * followed by the body; for a peer join, 'peer joined: name (human)
- * (provisional, not yet identified) — description'; for an identification,
- * 'peer identified: name (was old) — description'; undefined for a peer leave.
+ * renderChannelContent formats the channel text of a message for the
+ * recipient me: an optional first line with «subject», the audience note and
+ * [final], then the body. Sender, expectation and ids are not repeated: they
+ * are in the channel tag's attributes. Peer events are not surfaced (undefined):
+ * pushing them would wake every idle window for news nobody acts on; peers
+ * lists who is online when it matters.
  */
-export function renderChannelContent(event: HubEvent): string | undefined {
-  if (event.type === 'peer') {
-    if (event.event === 'left') return undefined;
-    const kind = event.kind === 'human' ? ' (human)' : '';
-    if (event.event === 'updated') {
-      const was =
-        event.previous_name && event.previous_name !== event.name
-          ? ` (was ${event.previous_name})`
-          : '';
-      return `peer identified: ${event.name}${kind}${was} — ${event.description}`;
-    }
-    const state = event.provisional ? ' (provisional, not yet identified)' : '';
-    return `peer joined: ${event.name}${kind}${state} — ${event.description}`;
-  }
-  const { message, subject } = event;
-  const head = `${message.from} → you (${describeExpectation(message.expectation)}) in conversation ${message.conversation_id}`;
-  const title = subject ? ` «${subject}»` : '';
-  const tail = message.final ? ' [final]' : '';
-  return `${head}${title}${tail}:\n\n${message.body}`;
+export function renderChannelContent(event: HubEvent, me = ''): string | undefined {
+  if (event.type === 'peer') return undefined;
+  const parts = [
+    event.subject ? `«${event.subject}»` : '',
+    audience(event, me) ?? '',
+    event.message.final ? '[final]' : '',
+  ].filter((p) => p !== '');
+  return parts.length > 0 ? `${parts.join(' — ')}\n\n${event.message.body}` : event.message.body;
 }
 
 /**
  * channelMeta builds the channel meta attributes (all string values, identifier
  * keys as the channel contract requires): conversation_id, message_id, from,
- * expectation and final for a message; peer, event, kind and provisional for a
- * peer event.
+ * expectation, final and kind (direct, announcement or group) for a message;
+ * peer, event, kind and provisional for a peer event.
  */
 export function channelMeta(event: HubEvent): Record<string, string> {
   if (event.type === 'peer') {
@@ -93,6 +87,7 @@ export function channelMeta(event: HubEvent): Record<string, string> {
     from: m.from,
     expectation: m.expectation,
     final: String(m.final),
+    kind: event.kind,
   };
 }
 
@@ -101,9 +96,12 @@ export function channelMeta(event: HubEvent): Record<string, string> {
  * notification on the MCP server and, for a message, acks its delivery as
  * notified via channel (ack failures are ignored). While the identity is still
  * provisional, a message gets IDENTIFY_FIRST appended. Returns false without
- * emitting for events that are not surfaced (peer left), and for every event
- * when channel is false (Claude Code would drop the notification): a message
- * then stays queued at the hub so the hooks surface it.
+ * emitting, leaving the message queued at the hub so a hook shows it in full
+ * at the window's next prompt or tool call: for every event when channel is
+ * false (Claude Code would drop the notification), for a message whose event
+ * says not to wake the window (information between agents), for a message an
+ * active await of this edge will return (awaited, so it is not shown twice),
+ * and for peer events, which are not surfaced.
  */
 export async function emitChannel(
   sink: ChannelSink,
@@ -111,9 +109,11 @@ export async function emitChannel(
   identity: Identity,
   event: HubEvent,
   channel: boolean | undefined = true,
+  awaited: (event: MessageEvent) => boolean = () => false,
 ): Promise<boolean> {
   if (channel === false) return false;
-  const rendered = renderChannelContent(event);
+  if (event.type === 'message' && (!event.wake || awaited(event))) return false;
+  const rendered = renderChannelContent(event, identity.name);
   if (rendered === undefined) return false;
   const content =
     event.type === 'message' && identity.provisional

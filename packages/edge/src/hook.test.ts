@@ -175,7 +175,7 @@ test('pending nudges a provisional agent at prompt time and the hooks follow the
   }
 });
 
-test('pending surfaces waiting messages once, skips agent-link tool calls, and stop blocks on open replies', async () => {
+test('pending shows waiting messages once in full, skips agent-link tool calls, and stop blocks on open replies', async () => {
   const { hub, url } = await startTestHub();
   const client = new HubClient(url);
   // The designer has no edge, hence no channel subscription: the hook path is the only delivery.
@@ -222,9 +222,9 @@ test('pending surfaces waiting messages once, skips agent-link tool calls, and s
     assert.equal(out.hookSpecificOutput?.hookEventName, 'PostToolUse');
     assert.match(
       out.hookSpecificOutput?.additionalContext ?? '',
-      /1 message waiting.*\n- architect \(reply\) in cv_\w+: Please check/,
+      /1 message for you, shown in full.*\n--- from architect \(expects a reply\) in cv_\w+:\nPlease check the cache design when you can$/,
     );
-    assert.equal(state(), 'notified');
+    assert.equal(state(), 'read', 'shown in full, so nothing is left to fetch');
     const second = await runHook(
       'pending',
       { session_id: 'sess-designer', cwd, hook_event_name: 'UserPromptSubmit' },
@@ -236,7 +236,7 @@ test('pending surfaces waiting messages once, skips agent-link tool calls, and s
     const b = parse(blocked.stdout);
     assert.equal(b.decision, 'block');
     assert.match(b.reason ?? '', /1 peer is waiting for your reply/);
-    assert.equal(state(), 'notified', 'stop never changes delivery state');
+    assert.equal(state(), 'read', 'stop never changes delivery state');
 
     const active = await runHook(
       'stop',

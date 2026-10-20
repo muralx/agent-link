@@ -70,3 +70,19 @@ test('an older database gains the provisional, window and guard columns on open'
   openDatabase(path).close();
   db.close();
 });
+
+test('conversations from before kinds become groups, so their replies still reach everyone', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'agent-link-kind-'));
+  const path = join(dir, 'old.db');
+  const old = new DatabaseSync(path);
+  old.exec(`CREATE TABLE conversation (id TEXT PRIMARY KEY, workspace TEXT NOT NULL, subject TEXT,
+    created_by TEXT NOT NULL, created_at TEXT NOT NULL)`);
+  old.exec(`INSERT INTO conversation VALUES ('cv_1','w',NULL,'ag_1','t')`);
+  old.close();
+  const db = openDatabase(path);
+  const row = db.prepare('SELECT kind FROM conversation WHERE id = ?').get('cv_1') as {
+    kind: string;
+  };
+  assert.equal(row.kind, 'group');
+  db.close();
+});

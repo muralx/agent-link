@@ -32,10 +32,12 @@ function int(value: string | null, fallback: number, min: number, max: number): 
  * registerMessageRoutes adds the authenticated message routes: POST
  * /v1/messages (the guard's enforce first, which refuses a quarantined sender
  * and quarantines one that breaks a rule; then send or reply via
- * MessageStore.send, and a message event is published to every recipient id
- * and to the workspace audit feed), GET /v1/agents/:id/inbox (unread_only,
- * limit), GET /v1/agents/:id/conversations (open_only) and GET
- * /v1/conversations/:id (since = message id).
+ * MessageStore.send, a message event published to every recipient id with its
+ * own wake flag and to the workspace audit feed, and a SendResponse with the
+ * conversation kind), GET /v1/agents/:id/inbox (unread_only, meaning not shown
+ * yet, and limit), GET /v1/agents/:id/conversations (open_only) and GET
+ * /v1/conversations/:id (since = message id; only the messages the caller sent
+ * or received).
  */
 export function registerMessageRoutes(deps: HubDeps): void {
   const { router, stores } = deps;
@@ -59,6 +61,7 @@ export function registerMessageRoutes(deps: HubDeps): void {
     const body: SendResponse = {
       message_id: result.message_id,
       conversation_id: result.conversation_id,
+      kind: result.kind,
       delivered_to: result.delivered_to,
       offline: result.offline,
     };

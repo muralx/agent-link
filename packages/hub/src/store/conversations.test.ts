@@ -26,6 +26,7 @@ test('create stores the header and the participants', () => {
     workspace: 'w',
     createdBy: a.id,
     subject: 'Caching',
+    kind: 'group',
     participantIds: [a.id, b.id],
   });
   assert.match(conv.id, /^cv_/);
@@ -45,6 +46,7 @@ test('addParticipants ignores agents already present', () => {
     workspace: 'w',
     createdBy: a.id,
     subject: null,
+    kind: 'group',
     participantIds: [a.id, b.id],
   });
   conversations.addParticipants(conv.id, [b.id, c.id]);

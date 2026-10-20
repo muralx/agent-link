@@ -17,96 +17,69 @@ const message: Message = {
   created_at: '2026-10-10T00:00:00.000Z',
 };
 
-test('renderChannelContent describes expectation, subject and final', () => {
+test('a message shows subject, audience and final, never the fields the tag already carries', () => {
   const base: HubEvent = {
     type: 'message',
     message,
     subject: 'Caching',
     participants: ['architect', 'designer'],
+    kind: 'direct',
+    starter: 'architect',
+    wake: true,
+  };
+  assert.equal(renderChannelContent(base, 'designer'), '«Caching»\n\nHello');
+  assert.equal(renderChannelContent({ ...base, subject: null }, 'designer'), 'Hello');
+  assert.equal(
+    renderChannelContent({ ...base, message: { ...message, final: true } }, 'designer'),
+    '«Caching» — [final]\n\nHello',
+  );
+  const announcement: HubEvent = {
+    ...base,
+    kind: 'announcement',
+    participants: ['architect', 'designer', 'reviewer', 'tester'],
   };
   assert.equal(
-    renderChannelContent(base),
-    'architect → you (expects reply) in conversation cv_1 «Caching»:\n\nHello',
+    renderChannelContent(announcement, 'designer'),
+    '«Caching» — announcement from architect to 3 peers; your reply goes to architect only\n\nHello',
   );
+  assert.match(renderChannelContent(announcement, 'architect')!, /reply to your announcement/);
   assert.match(
-    renderChannelContent({ ...base, subject: null, message: { ...message, expectation: 'none' } })!,
-    /^architect → you \(fyi\) in conversation cv_1:\n\nHello$/,
-  );
-  assert.match(
-    renderChannelContent({
-      ...base,
-      message: { ...message, expectation: 'updates', final: true },
-    })!,
-    /\(wants updates\) in conversation cv_1 «Caching» \[final\]:/,
+    renderChannelContent({ ...announcement, kind: 'group' }, 'designer')!,
+    /group with architect, reviewer, tester; replies reach everyone/,
   );
 });
 
-test('peer events render joins and identifications, never leaves', () => {
-  assert.equal(
-    renderChannelContent({
-      type: 'peer',
-      event: 'joined',
-      name: 'reviewer',
-      description: 'Reviews PRs',
-      kind: 'agent',
-      provisional: false,
-    }),
-    'peer joined: reviewer — Reviews PRs',
-  );
-  assert.match(
-    renderChannelContent({
-      type: 'peer',
-      event: 'joined',
-      name: 'dana',
-      description: 'Owner',
-      kind: 'human',
-      provisional: false,
-    })!,
-    /\(human\)/,
-  );
-  assert.equal(
-    renderChannelContent({
-      type: 'peer',
-      event: 'joined',
-      name: 'agent-link',
-      description: 'Not yet',
-      kind: 'agent',
-      provisional: true,
-    }),
-    'peer joined: agent-link (provisional, not yet identified) — Not yet',
-  );
-  assert.equal(
-    renderChannelContent({
-      type: 'peer',
-      event: 'updated',
-      name: 'architect',
-      description: 'Designs the hub',
-      kind: 'agent',
-      provisional: false,
-      previous_name: 'agent-link',
-    }),
-    'peer identified: architect (was agent-link) — Designs the hub',
-  );
-  assert.equal(
-    renderChannelContent({
-      type: 'peer',
-      event: 'left',
-      name: 'reviewer',
-      description: '',
-      kind: 'agent',
-      provisional: false,
-    }),
-    undefined,
-  );
+test('peer events are never pushed', () => {
+  for (const event of ['joined', 'updated', 'left'] as const) {
+    assert.equal(
+      renderChannelContent({
+        type: 'peer',
+        event,
+        name: 'reviewer',
+        description: 'Reviews PRs',
+        kind: 'agent',
+        provisional: false,
+      }),
+      undefined,
+    );
+  }
 });
 
 test('channelMeta uses only string values', () => {
-  const meta = channelMeta({ type: 'message', message, subject: null, participants: [] });
+  const meta = channelMeta({
+    type: 'message',
+    message,
+    subject: null,
+    participants: [],
+    kind: 'announcement',
+    wake: true,
+  });
   for (const v of Object.values(meta)) assert.equal(typeof v, 'string');
   assert.equal(meta['final'], 'false');
+  assert.equal(meta['kind'], 'announcement');
 });
 
-test('emitChannel emits and acks only when the channel is enabled', async () => {
+test('emitChannel emits and acks only when the channel is enabled and the window should wake', async () => {
   const sent: unknown[] = [];
   const acked: unknown[] = [];
   const sink = {
@@ -135,6 +108,8 @@ test('emitChannel emits and acks only when the channel is enabled', async () => 
     message,
     subject: null,
     participants: ['architect', 'designer'],
+    kind: 'direct',
+    wake: true,
   };
   assert.equal(
     await emitChannel(sink, client, identity, event, false),
@@ -150,4 +125,16 @@ test('emitChannel emits and acks only when the channel is enabled', async () => 
   );
   assert.equal(sent.length, 1);
   assert.deepEqual(acked[0], ['msg_1', 'ag_1', 't', 'notified', 'channel']);
+  assert.equal(
+    await emitChannel(sink, client, identity, { ...event, wake: false }),
+    false,
+    'information between agents waits for the hooks',
+  );
+  assert.equal(
+    await emitChannel(sink, client, identity, event, true, () => true),
+    false,
+    'an active await returns it instead',
+  );
+  assert.equal(sent.length, 1);
+  assert.equal(acked.length, 1, 'skipped deliveries stay queued');
 });

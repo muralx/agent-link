@@ -1,9 +1,14 @@
 import type { ServerResponse } from 'node:http';
-import { DeliveryAckRequestSchema, type AwaitResponse, type HubEvent } from '@agent-link/protocol';
+import {
+  DeliveryAckRequestSchema,
+  type AgentKind,
+  type AwaitResponse,
+  type HubEvent,
+} from '@agent-link/protocol';
 import { requireAgent } from '../auth.ts';
 import type { HubDeps } from '../deps.ts';
 import { now } from '../store/db.ts';
-import type { QueuedMessage } from '../store/messages.ts';
+import { wakes, type QueuedMessage } from '../store/messages.ts';
 
 /**
  * AWAIT_SLICE_MAX_S caps one await request at 25 s; the edge chains requests to
@@ -27,16 +32,28 @@ function writeFrame(res: ServerResponse, id: string, event: HubEvent): void {
   res.write(`id: ${id}\nevent: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`);
 }
 
-/** toEvent wraps a queued message as a message HubEvent. */
-function toEvent(q: QueuedMessage): HubEvent {
-  return { type: 'message', message: q.message, subject: q.subject, participants: q.participants };
+/**
+ * toEvent wraps a queued message as a message HubEvent for a recipient of the
+ * given kind, with the wake flag publishMessage would have set.
+ */
+function toEvent(q: QueuedMessage, toKind: AgentKind): HubEvent {
+  return {
+    type: 'message',
+    message: q.message,
+    subject: q.subject,
+    participants: q.participants,
+    kind: q.kind,
+    starter: q.starter,
+    wake: wakes(q.message.expectation, q.fromKind, toKind),
+  };
 }
 
 /**
  * registerStreamRoutes adds the delivery routes. GET /v1/agents/:id/events is
  * the SSE stream: headers are flushed immediately so a client's fetch resolves
  * on an idle stream, still-queued deliveries are replayed (skipping ids at or
- * before Last-Event-ID), then live message and peer events follow with a
+ * before Last-Event-ID) with the kind, starter and wake flag a live event would
+ * carry for this recipient, then live message and peer events follow with a
  * keepalive comment every keepaliveMs; connect and close drive presence. GET
  * /v1/agents/:id/await long-polls for at most AWAIT_SLICE_MAX_S seconds and
  * returns the agent's unread messages matching the conversation/message filters
@@ -61,7 +78,7 @@ export function registerStreamRoutes(deps: HubDeps): void {
     for (const queued of stores.messages.queuedFor(agent.id)) {
       const id = eventId(queued.message);
       if (after !== undefined && id <= after) continue;
-      writeFrame(res, id, toEvent(queued));
+      writeFrame(res, id, toEvent(queued, agent.kind));
     }
 
     const unsubscribe = bus.subscribe(agent.id, (event) => {
