@@ -13,9 +13,15 @@ export function auditKey(workspace: string): string {
 }
 
 /**
- * publishMessage fans a stored message out as a message event to its
- * recipients, each with its own wake flag (see wakes), and to the workspace's
- * audit feed.
+ * publishMessage publishes a stored message as a message event on the event bus
+ * to each recipient and to the workspace's audit feed.
+ *
+ * Each recipient's copy carries its own wake flag, computed by wakes from the
+ * message's expectation, the sender's kind, that recipient's kind (agent when
+ * the recipient no longer exists) and whether the message answers that
+ * recipient's open question. The audit feed (auditKey) gets the same event with
+ * wake true. Delivery state is not touched; it only publishes, so the message
+ * must already be stored. recipientIds are agent ids, not names.
  */
 export function publishMessage(
   deps: HubDeps,
@@ -36,7 +42,7 @@ export function publishMessage(
     const toKind = deps.stores.agents.byId(id)?.kind ?? 'agent';
     deps.bus.publish(id, {
       ...event,
-      wake: wakes(queued.message.expectation, queued.fromKind, toKind),
+      wake: wakes(queued.message.expectation, queued.fromKind, toKind, queued.answers.includes(id)),
     });
   }
   deps.bus.publish(auditKey(workspace), event);

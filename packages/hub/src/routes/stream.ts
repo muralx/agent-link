@@ -33,10 +33,10 @@ function writeFrame(res: ServerResponse, id: string, event: HubEvent): void {
 }
 
 /**
- * toEvent wraps a queued message as a message HubEvent for a recipient of the
- * given kind, with the wake flag publishMessage would have set.
+ * toEvent wraps a queued message as a message HubEvent for the recipient of the
+ * given id and kind, with the wake flag publishMessage would have set.
  */
-function toEvent(q: QueuedMessage, toKind: AgentKind): HubEvent {
+function toEvent(q: QueuedMessage, toId: string, toKind: AgentKind): HubEvent {
   return {
     type: 'message',
     message: q.message,
@@ -44,7 +44,7 @@ function toEvent(q: QueuedMessage, toKind: AgentKind): HubEvent {
     participants: q.participants,
     kind: q.kind,
     starter: q.starter,
-    wake: wakes(q.message.expectation, q.fromKind, toKind),
+    wake: wakes(q.message.expectation, q.fromKind, toKind, q.answers.includes(toId)),
   };
 }
 
@@ -78,7 +78,7 @@ export function registerStreamRoutes(deps: HubDeps): void {
     for (const queued of stores.messages.queuedFor(agent.id)) {
       const id = eventId(queued.message);
       if (after !== undefined && id <= after) continue;
-      writeFrame(res, id, toEvent(queued, agent.kind));
+      writeFrame(res, id, toEvent(queued, agent.id, agent.kind));
     }
 
     const unsubscribe = bus.subscribe(agent.id, (event) => {

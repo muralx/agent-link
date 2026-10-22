@@ -40,9 +40,18 @@ export interface SendParams {
 }
 
 /**
- * SendResult extends the protocol's SendResponse with the stored Message, the
- * recipient ids to publish to, and the subject, participant names, starter name
- * and sender kind for the event payload.
+ * SendResult is what MessageStore.send returns: the protocol's send response
+ * (message_id, conversation_id, delivered_to, offline) plus the context the
+ * caller needs to publish the message as events.
+ *
+ * kind is the conversation's kind after this send, so a direct conversation
+ * that gained a participant already shows as a group. delivered_to and offline
+ * split the recipient names by whether the agent is online; every recipient has
+ * a queued delivery either way. recipientIds are the agents to publish to, and
+ * answers lists those among them whose open question or request for updates
+ * this message answers, which wakes them whatever its expectation. message,
+ * subject, participants, starter and fromKind fill the event payload (see
+ * QueuedMessage).
  */
 export interface SendResult {
   message_id: string;
@@ -59,6 +68,11 @@ export interface SendResult {
    * the event wakes it.
    */
   fromKind: AgentKind;
+  /**
+   * answers lists the ids of the recipients whose open question or request for
+   * updates this message answers; it wakes them whatever its expectation.
+   */
+  answers: string[];
   delivered_to: string[];
   offline: string[];
   message: Message;
@@ -77,10 +91,15 @@ export interface Delivery {
 }
 
 /**
- * QueuedMessage is a message with the context an SSE message event carries:
- * subject, participant names, the conversation's kind, the name of the agent
- * that started it (who an announcement's replies go to) and the sender's kind,
- * which decides with the recipient's whether the event wakes it (wakes).
+ * QueuedMessage is a stored message plus the context an SSE message event
+ * carries, as built by MessageStore.withContext.
+ *
+ * It holds the conversation's subject (null when none), participant names, kind
+ * and the starter's name (who an announcement's replies go to; empty when the
+ * starter no longer exists), the sender's kind, and answers, the ids of the
+ * recipients whose open question (reply) or request for updates in this
+ * conversation the message answers. The sender's kind and answers decide, per
+ * recipient, whether the event wakes it (see wakes).
  */
 export interface QueuedMessage {
   message: Message;
@@ -95,6 +114,12 @@ export interface QueuedMessage {
   starter: string;
   /** fromKind is the sender's kind (agent or human). */
   fromKind: AgentKind;
+  /**
+   * answers lists the ids of the recipients this message answers: each had
+   * asked the sender a question (reply) or for updates in this conversation,
+   * still open when the message was sent.
+   */
+  answers: string[];
 }
 
 /**
@@ -117,8 +142,15 @@ export interface UnreadFilter {
 }
 
 /**
- * MessageRow is the raw row shape produced by MESSAGE_SELECT, the sender's kind
- * included; exported for AuditStore, which runs its own message queries.
+ * MessageRow is the raw row of a message query, as the shared SELECT
+ * (MESSAGE_SELECT) returns it: the message columns, the sender's name as
+ * from_name and the sender's kind as from_kind.
+ *
+ * to_names is the JSON array of recipient names as stored text, and final is
+ * the 0/1 integer flag; toMessage turns a row into the protocol Message.
+ * answers is set only by queries that join one recipient's delivery
+ * (queuedFor), where it is the delivery's answers flag (0 or 1). Exported for
+ * AuditStore, which runs its own message queries over the same columns.
  */
 export interface MessageRow {
   id: string;
@@ -132,6 +164,11 @@ export interface MessageRow {
   created_at: string;
   /** from_kind is the sender's kind from the agent table. */
   from_kind: AgentKind;
+  /**
+   * answers is the delivery's answers flag, present only in queries that join
+   * one recipient's delivery (queuedFor).
+   */
+  answers?: number;
 }
 
 /**
@@ -139,19 +176,27 @@ export interface MessageRow {
  * yields MessageRow columns, the sender's name and kind included; exported for
  * AuditStore.
  */
+const MESSAGE_COLUMNS = `m.id, m.conversation_id, a.name AS from_name, m.to_names, m.body,
+  m.expectation, m.final, m.in_reply_to, m.created_at, a.kind AS from_kind`;
 export const MESSAGE_SELECT = `
-  SELECT m.id, m.conversation_id, a.name AS from_name, m.to_names, m.body, m.expectation,
-         m.final, m.in_reply_to, m.created_at, a.kind AS from_kind
+  SELECT ${MESSAGE_COLUMNS}
   FROM message m JOIN agent a ON a.id = m.from_agent`;
 
 /**
  * wakes decides whether a message event should wake its recipient's window: a
  * question or a request for updates always does, and so does anything to or
- * from a human; information one agent sends another (expectation none) waits
- * for the recipient's next turn, where a hook shows it.
+ * from a human, or anything that answers a question or request for updates the
+ * recipient is waiting on (answers), whatever its own expectation; other
+ * information one agent sends another (expectation none) waits for the
+ * recipient's next turn, where a hook shows it.
  */
-export function wakes(expectation: Expectation, fromKind: AgentKind, toKind: AgentKind): boolean {
-  return expectation !== 'none' || fromKind === 'human' || toKind === 'human';
+export function wakes(
+  expectation: Expectation,
+  fromKind: AgentKind,
+  toKind: AgentKind,
+  answers: boolean,
+): boolean {
+  return expectation !== 'none' || fromKind === 'human' || toKind === 'human' || answers;
 }
 
 /**
@@ -179,12 +224,19 @@ export function toMessage(row: MessageRow): Message {
 }
 
 /**
- * MessageStore owns the message and delivery tables and implements the
- * conversation rules of the spec: sending (new thread or reply, name
- * resolution, offline participants), system notices that bypass those rules
- * (post), per-recipient delivery state (queued, notified, read), what hooks show,
- * open expectations and the unread queries behind await. All multi-row writes
- * in send and post run in one SQLite transaction.
+ * MessageStore owns the message and delivery tables and implements the hub's
+ * conversation rules over one SQLite database.
+ *
+ * It sends messages (a new thread or a post into an existing one, name
+ * resolution, offline participants), posts system notices that bypass those
+ * rules, tracks each recipient's delivery state (queued, notified, read) and
+ * answers what hooks, inbox, thread and await show. It also computes the
+ * expectations still open for an agent (replies owed, updates not yet closed by
+ * a final message). The multi-row writes of send and post each run in one
+ * transaction on the shared connection, which must be the same DatabaseSync the
+ * agent and conversation stores use. Failures of the conversation rules are
+ * thrown as HubError with a code such as peer_not_found, not_participant or
+ * not_found.
  */
 export class MessageStore {
   readonly #db: DatabaseSync;
@@ -512,25 +564,31 @@ export class MessageStore {
   /**
    * queuedFor returns the agent's still-queued messages, oldest first, each
    * with the event context withContext adds (subject, participant names, kind,
-   * starter, sender kind); used to replay on stream connect.
+   * starter, sender kind, and the agent's id in answers when its delivery
+   * answers its open question); used to replay on stream connect.
    */
   queuedFor(agentId: string): QueuedMessage[] {
     const rows = this.#db
       .prepare(
-        `${MESSAGE_SELECT} JOIN delivery d ON d.message_id = m.id
+        `SELECT ${MESSAGE_COLUMNS}, d.answers
+         FROM message m JOIN agent a ON a.id = m.from_agent
+         JOIN delivery d ON d.message_id = m.id
          WHERE d.to_agent = ? AND d.state = 'queued' ORDER BY m.rowid`,
       )
       .all(agentId) as unknown as MessageRow[];
-    return rows.map((row) => this.withContext(toMessage(row), row.from_kind));
+    return rows.map((row) =>
+      this.withContext(toMessage(row), row.from_kind, row.answers ? [agentId] : []),
+    );
   }
 
   /**
    * withContext attaches the conversation subject, participant names, kind and
-   * starter name, and the given sender kind, to a message: the payload an SSE
+   * starter name, and the given sender kind and answered recipient ids (none by
+   * default), to a message: the payload an SSE
    * message event is built from. A conversation that no longer exists gives a
    * null subject, kind group and an empty starter.
    */
-  withContext(message: Message, fromKind: AgentKind): QueuedMessage {
+  withContext(message: Message, fromKind: AgentKind, answers: string[] = []): QueuedMessage {
     const conversation = this.#conversations.get(message.conversation_id);
     return {
       message,
@@ -539,6 +597,7 @@ export class MessageStore {
       kind: conversation?.kind ?? 'group',
       starter: conversation ? (this.#agents.byId(conversation.created_by)?.name ?? '') : '',
       fromKind,
+      answers,
     };
   }
 
@@ -620,7 +679,10 @@ export class MessageStore {
    * offline participants too; the result splits recipient names into
    * delivered_to (online) and offline, and also carries the recipient ids,
    * kind, starter, sender kind, subject and participant names the caller needs
-   * to publish SSE events.
+   * to publish SSE events. A recipient whose question (reply) or request for
+   * updates in this conversation the sender had not yet closed is in answers,
+   * and its delivery is flagged, so the message wakes it whatever its own
+   * expectation.
    */
   #sendInTransaction(params: SendParams): SendResult {
     const from = this.#agents.byId(params.fromId);
@@ -694,6 +756,12 @@ export class MessageStore {
       if (!agent) throw new Error(`participant ${id} vanished`);
       return agent;
     });
+    const askers = new Set(
+      [...this.openReplies(from.id), ...this.openUpdates(from.id)]
+        .filter((o) => o.conversation_id === conversation.id)
+        .map((o) => o.from),
+    );
+    const answers = recipients.filter((r) => askers.has(r.name)).map((r) => r.id);
     const id = newId('msg');
     const ts = now();
     this.#db
@@ -713,9 +781,9 @@ export class MessageStore {
         ts,
       );
     const insertDelivery = this.#db.prepare(
-      "INSERT INTO delivery (message_id, to_agent, state) VALUES (?, ?, 'queued')",
+      "INSERT INTO delivery (message_id, to_agent, state, answers) VALUES (?, ?, 'queued', ?)",
     );
-    for (const r of recipients) insertDelivery.run(id, r.id);
+    for (const r of recipients) insertDelivery.run(id, r.id, answers.includes(r.id) ? 1 : 0);
 
     const message: Message = {
       id,
@@ -734,6 +802,7 @@ export class MessageStore {
       kind: conversation.kind,
       starter: this.#agents.byId(conversation.created_by)?.name ?? '',
       fromKind: from.kind,
+      answers,
       delivered_to: recipients.filter((r) => r.status === 'online').map((r) => r.name),
       offline: recipients.filter((r) => r.status !== 'online').map((r) => r.name),
       message,

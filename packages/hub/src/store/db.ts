@@ -72,6 +72,7 @@ CREATE TABLE IF NOT EXISTS delivery (
   notified_at TEXT,
   read_at     TEXT,
   nag_count   INTEGER NOT NULL DEFAULT 0,
+  answers     INTEGER NOT NULL DEFAULT 0,
   PRIMARY KEY (message_id, to_agent)
 );
 CREATE INDEX IF NOT EXISTS delivery_to_state ON delivery(to_agent, state);
@@ -118,8 +119,10 @@ export function openDatabase(path: string): DatabaseSync {
  * MIGRATIONS lists columns added after the first release as [table, column,
  * definition]; migrate adds each one that an existing database lacks. The
  * guard's agent columns (watcher, quarantined_at, quarantine_reason) came
- * next; the conversation kind is the latest, and conversations that predate it
- * become groups, which is how they behaved.
+ * next; then the conversation kind, and conversations that predate it become
+ * groups, which is how they behaved; the latest is delivery.answers, which marks
+ * a delivery that answers a question the recipient is waiting on (deliveries
+ * that predate it answer nothing, which is how they behaved).
  */
 const MIGRATIONS: [table: string, column: string, definition: string][] = [
   ['agent', 'provisional', 'INTEGER NOT NULL DEFAULT 0'],
@@ -129,6 +132,7 @@ const MIGRATIONS: [table: string, column: string, definition: string][] = [
   ['agent', 'quarantined_at', 'TEXT'],
   ['agent', 'quarantine_reason', 'TEXT'],
   ['conversation', 'kind', "TEXT NOT NULL DEFAULT 'group'"],
+  ['delivery', 'answers', 'INTEGER NOT NULL DEFAULT 0'],
 ];
 
 /**
