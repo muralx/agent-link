@@ -550,10 +550,11 @@ export type HealthResponse = z.infer<typeof HealthResponseSchema>;
  * MessageEventSchema is the SSE event the hub sends an edge for each inbound
  * message, with what the edge needs to render it: the conversation subject,
  * participant names, kind and starter (an announcement's replies go to the
- * starter only). wake is false for information an agent sent another agent
- * (expectation none, neither side human): the edge then leaves it for the
- * hooks instead of waking an idle window. kind and wake default so events from
- * a hub that predates them still parse and behave as before.
+ * starter only). wake false tells the edge to leave the message for the hooks
+ * instead of waking an idle window; the hub sends every message with wake
+ * true, since information an agent sends usually matters to the recipient's
+ * work now. kind and wake default so events from a hub that predates them
+ * still parse and behave as before.
  */
 export const MessageEventSchema = z.object({
   type: z.literal('message'),

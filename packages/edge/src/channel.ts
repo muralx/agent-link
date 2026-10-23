@@ -99,7 +99,8 @@ export function channelMeta(event: HubEvent): Record<string, string> {
  * emitting, leaving the message queued at the hub so a hook shows it in full
  * at the window's next prompt or tool call: for every event when channel is
  * false (Claude Code would drop the notification), for a message whose event
- * says not to wake the window (information between agents), for a message an
+ * says not to wake the window (the hub sets wake on every message today), for
+ * a message an
  * active await of this edge will return (awaited, so it is not shown twice),
  * and for peer events, which are not surfaced.
  */

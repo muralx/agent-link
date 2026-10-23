@@ -86,20 +86,3 @@ test('conversations from before kinds become groups, so their replies still reac
   assert.equal(row.kind, 'group');
   db.close();
 });
-
-test('deliveries from before answers answer nothing, so they wake as they did', () => {
-  const dir = mkdtempSync(join(tmpdir(), 'agent-link-answers-'));
-  const path = join(dir, 'old.db');
-  const old = new DatabaseSync(path);
-  old.exec(`CREATE TABLE delivery (message_id TEXT NOT NULL, to_agent TEXT NOT NULL,
-    state TEXT NOT NULL, via TEXT, notified_at TEXT, read_at TEXT,
-    nag_count INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (message_id, to_agent))`);
-  old.exec(`INSERT INTO delivery (message_id, to_agent, state) VALUES ('msg_1','ag_1','queued')`);
-  old.close();
-  const db = openDatabase(path);
-  const row = db.prepare('SELECT answers FROM delivery WHERE message_id = ?').get('msg_1') as {
-    answers: number;
-  };
-  assert.equal(row.answers, 0);
-  db.close();
-});

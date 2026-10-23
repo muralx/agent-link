@@ -1,14 +1,9 @@
 import type { ServerResponse } from 'node:http';
-import {
-  DeliveryAckRequestSchema,
-  type AgentKind,
-  type AwaitResponse,
-  type HubEvent,
-} from '@agent-link/protocol';
+import { DeliveryAckRequestSchema, type AwaitResponse, type HubEvent } from '@agent-link/protocol';
 import { requireAgent } from '../auth.ts';
 import type { HubDeps } from '../deps.ts';
 import { now } from '../store/db.ts';
-import { wakes, type QueuedMessage } from '../store/messages.ts';
+import type { QueuedMessage } from '../store/messages.ts';
 
 /**
  * AWAIT_SLICE_MAX_S caps one await request at 25 s; the edge chains requests to
@@ -33,10 +28,10 @@ function writeFrame(res: ServerResponse, id: string, event: HubEvent): void {
 }
 
 /**
- * toEvent wraps a queued message as a message HubEvent for the recipient of the
- * given id and kind, with the wake flag publishMessage would have set.
+ * toEvent wraps a queued message as a message HubEvent, as publishMessage
+ * would have sent it.
  */
-function toEvent(q: QueuedMessage, toId: string, toKind: AgentKind): HubEvent {
+function toEvent(q: QueuedMessage): HubEvent {
   return {
     type: 'message',
     message: q.message,
@@ -44,7 +39,7 @@ function toEvent(q: QueuedMessage, toId: string, toKind: AgentKind): HubEvent {
     participants: q.participants,
     kind: q.kind,
     starter: q.starter,
-    wake: wakes(q.message.expectation, q.fromKind, toKind, q.answers.includes(toId)),
+    wake: true,
   };
 }
 
@@ -78,7 +73,7 @@ export function registerStreamRoutes(deps: HubDeps): void {
     for (const queued of stores.messages.queuedFor(agent.id)) {
       const id = eventId(queued.message);
       if (after !== undefined && id <= after) continue;
-      writeFrame(res, id, toEvent(queued, agent.id, agent.kind));
+      writeFrame(res, id, toEvent(queued));
     }
 
     const unsubscribe = bus.subscribe(agent.id, (event) => {

@@ -71,11 +71,11 @@ every message in a group wakes all of them.
 
 ## Step 3: choose the expectation honestly
 
-| You want                       | `expectation` | What happens                                                                                           |
-| ------------------------------ | ------------- | ------------------------------------------------------------------------------------------------------ |
-| An answer you will act on      | `reply`       | The peer is woken and told someone is waiting; its Stop hook holds it until it answers.                |
-| Progress on work you delegated | `updates`     | The peer should reply as it goes and send `final: true` when done.                                     |
-| Nothing                        | `none`        | Information. An agent gets it at its next turn instead of being woken; a human always sees it at once. |
+| You want                       | `expectation` | What happens                                                                            |
+| ------------------------------ | ------------- | --------------------------------------------------------------------------------------- |
+| An answer you will act on      | `reply`       | The peer is woken and told someone is waiting; its Stop hook holds it until it answers. |
+| Progress on work you delegated | `updates`     | The peer should reply as it goes and send `final: true` when done.                      |
+| Nothing                        | `none`        | Information. The recipient is woken and sees it, but owes you nothing.                  |
 
 `send` returns immediately with `delivered_to` (the recipients online now) and `offline` (the
 ones that will get it when they come back). **Keep working.** The answer arrives as a channel
@@ -166,5 +166,5 @@ releases it. Reading still works.
   your next prompt or tool call, but an idle window is never woken. Tell the user; a human relay
   must be restarted with the flag.
 - A peer should have received your message but did not react: `delivered_to` in your send
-  result says it was online. Information (`none`) waits for its next turn by design; a window
-  without the channels flag sees anything only when its user types.
+  result says it was online. A window without the channels flag sees anything only when its
+  user types.

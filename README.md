@@ -12,7 +12,7 @@ answers; the answer reaches the designer the same way. Nobody blocks and nobody 
 agent needs a decision, it asks you in the relay window.
 
 - Agents only see agents of their own workspace. Several repositories can share one workspace.
-- Questions wake an idle window; information waits for the agent's next turn.
+- Every message wakes the recipient's window, even when it is idle.
 - Replies go only where they are needed: an answer to an announcement reaches the one who
   asked, not every recipient.
 - A guard in the hub quarantines an agent that floods, loops or repeats itself until you
@@ -151,10 +151,8 @@ A direct conversation that gains a third participant becomes a group. Each agent
 messages it sent or received.
 
 The sender also says what it expects: `reply` (it wants an answer), `updates` (keep it posted
-until a final message) or `none` (information). Questions and update requests wake the
-recipient's window at once, and so does anything sent by or to a human. Information between
-agents is not pushed; the agent sees it in full at its next prompt or tool call. Agents joining
-the workspace wake nobody.
+until a final message) or `none` (information). Every message wakes the recipient's window at
+once. Agents joining the workspace wake nobody.
 
 Every message stays in the context of the agents that receive it, so agent-link avoids showing
 anything twice and the skill tells agents to leave out what the conversation or the message
@@ -246,7 +244,7 @@ longer need them.
 | `agent-link-edge: command not found` in a hook or MCP error | `~/.local/bin` is not on the `PATH` Claude Code sees. Add it in your shell profile and restart Claude Code.                       |
 | `peer_not_found`                                            | That agent is offline or the name is wrong; the error lists who is online.                                                        |
 | An agent is `quarantined`                                   | The guard blocked it. In the relay, "who is quarantined" says why and "release <name>" lifts it.                                  |
-| An agent did not react to information you sent              | Information (`none`) waits for its next turn by design. Ask with `reply` when you need it to act now.                             |
+| An agent did not react to a message you sent                | Its window was started without the channels flag, so it sees messages only when its user types. Restart it with the flag.         |
 
 The database is plain SQLite at `~/.local/share/agent-link/agent-link.db` if you want to look
 inside.

@@ -117,7 +117,7 @@ test('await returns immediately on existing unread, waits for new, and times out
   });
 });
 
-test('message events say who to wake: fyi between agents waits, questions, answers and humans wake', async () => {
+test('every message event wakes its recipient, information between agents included', async () => {
   await withHub(
     async (_hub, base) => {
       const a = await registerAgent(base, 'a');
@@ -133,30 +133,13 @@ test('message events say who to wake: fyi between agents waits, questions, answe
       };
 
       await send(base, a, { to: ['b'], body: 'fyi', expectation: 'none' });
-      assert.equal(await wake(toB), false, 'fyi from an agent to an agent does not wake');
+      assert.equal(await wake(toB), true, 'fyi from an agent to an agent wakes too');
       await send(base, a, { to: ['b'], body: 'question', expectation: 'reply' });
       assert.equal(await wake(toB), true, 'a question wakes');
       await send(base, h, { to: ['b'], body: 'pull', expectation: 'none' });
       assert.equal(await wake(toB), true, 'a human always wakes');
       await send(base, a, { to: ['h'], body: 'fyi human', expectation: 'none' });
       assert.equal(await wake(toH), true, 'a human relay is always woken');
-
-      const toA = await openStream(base, a);
-      const asked = await send(base, a, { to: ['b'], body: 'which?', expectation: 'reply' });
-      assert.equal(await wake(toB), true);
-      await send(base, b, {
-        conversation_id: asked.data.conversation_id,
-        body: 'this one',
-        expectation: 'none',
-      });
-      assert.equal(await wake(toA), true, 'an answer to a waiting question wakes the asker');
-      await send(base, b, {
-        conversation_id: asked.data.conversation_id,
-        body: 'also',
-        expectation: 'none',
-      });
-      assert.equal(await wake(toA), false, 'once answered, a fyi waits again');
-      toA.close();
 
       const announced = await send(base, a, { to: ['b', 'h'], body: 'all', expectation: 'none' });
       const [frame] = await toB.next(1);
@@ -168,27 +151,6 @@ test('message events say who to wake: fyi between agents waits, questions, answe
       assert.equal(announced.data.kind, 'announcement');
       toB.close();
       toH.close();
-    },
-    { keepaliveMs: 60_000 },
-  );
-});
-
-test('a replayed answer to a waiting question still wakes the asker', async () => {
-  await withHub(
-    async (_hub, base) => {
-      const a = await registerAgent(base, 'a');
-      const b = await registerAgent(base, 'b');
-      const asked = await send(base, a, { to: ['b'], body: 'which?', expectation: 'reply' });
-      await send(base, b, {
-        conversation_id: asked.data.conversation_id,
-        body: 'this one',
-        expectation: 'none',
-      });
-      const toA = await openStream(base, a);
-      const [frame] = await toA.next(1);
-      const data = frame?.data as HubEvent;
-      assert.equal(data.type === 'message' && data.wake, true);
-      toA.close();
     },
     { keepaliveMs: 60_000 },
   );

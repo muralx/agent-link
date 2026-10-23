@@ -133,8 +133,8 @@ async function waitFor(pred: () => boolean, what: string, timeoutMs = 5000): Pro
  * passing session ids. It asserts workspace visibility, that joining and
  * identifying wake nobody, channel notification delivery (subject and body
  * only, the rest in the tag's meta), a reply received through await, a
- * workspace-scoped broadcast that, being information between agents, waits in
- * the designer's inbox instead of waking it, and the offline rules (send to an
+ * workspace-scoped broadcast that wakes the designer although it is only
+ * information, and the offline rules (send to an
  * unregistered peer fails with peer_not_found, a reply to an offline
  * participant is recorded as offline).
  *
@@ -269,17 +269,11 @@ export async function runScenario(log: (line: string) => void = () => undefined)
       (broadcast['delivered_to'] as string[]).join() === 'designer',
       'broadcast reaches designer only',
     );
-    await new Promise((r) => setTimeout(r, 200));
-    expect(
-      !designer.notifications.some((x) => x.content.includes('Heads up')),
-      'information between agents does not wake the designer',
+    await waitFor(
+      () => designer.notifications.some((x) => x.content.includes('Heads up')),
+      'information between agents wakes the designer',
     );
-    const waitingFyi = (await designer.call('inbox'))['messages'] as { body: string }[];
-    expect(
-      waitingFyi.some((m) => m.body.includes('Heads up')),
-      `the fyi waits for the designer's next turn: ${JSON.stringify(waitingFyi)}`,
-    );
-    log('broadcast stayed inside the workspace and woke nobody');
+    log('broadcast stayed inside the workspace and woke the designer');
 
     const relay = await openEdge('alice', 'ws1', env);
     const watcher = await openEdge('watcher', 'ws1', env);

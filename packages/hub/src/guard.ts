@@ -1,7 +1,7 @@
 import type { Agent, GuardRule, Incident } from '@agent-link/protocol';
 import type { HubDeps } from './deps.ts';
 import { HubError } from './store/errors.ts';
-import { wakes, type QueuedMessage } from './store/messages.ts';
+import type { QueuedMessage } from './store/messages.ts';
 import type { SendAttempt } from './store/guard.ts';
 
 /**
@@ -13,15 +13,8 @@ export function auditKey(workspace: string): string {
 }
 
 /**
- * publishMessage publishes a stored message as a message event on the event bus
- * to each recipient and to the workspace's audit feed.
- *
- * Each recipient's copy carries its own wake flag, computed by wakes from the
- * message's expectation, the sender's kind, that recipient's kind (agent when
- * the recipient no longer exists) and whether the message answers that
- * recipient's open question. The audit feed (auditKey) gets the same event with
- * wake true. Delivery state is not touched; it only publishes, so the message
- * must already be stored. recipientIds are agent ids, not names.
+ * publishMessage fans a stored message out as a message event to its
+ * recipients, each woken by it, and to the workspace's audit feed.
  */
 export function publishMessage(
   deps: HubDeps,
@@ -38,13 +31,7 @@ export function publishMessage(
     starter: queued.starter,
     wake: true,
   };
-  for (const id of recipientIds) {
-    const toKind = deps.stores.agents.byId(id)?.kind ?? 'agent';
-    deps.bus.publish(id, {
-      ...event,
-      wake: wakes(queued.message.expectation, queued.fromKind, toKind, queued.answers.includes(id)),
-    });
-  }
+  for (const id of recipientIds) deps.bus.publish(id, event);
   deps.bus.publish(auditKey(workspace), event);
 }
 
