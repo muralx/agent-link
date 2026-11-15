@@ -64,7 +64,9 @@ export interface Hub {
  * createHub builds a hub over the SQLite file at dbPath with all stores, the
  * event bus, presence and every route group (health, sessions, agents,
  * messages, stream, guard, audit) wired, bound to host:port on listen() (port 0 picks a free
- * one). close() stops accepting connections first, then ends open SSE streams,
+ * one). Every agent the database holds as online starts with the reconnect
+ * grace, so one whose edge died while the hub was down goes offline and frees
+ * its name. close() stops accepting connections first, then ends open SSE streams,
  * presence timers and remaining connections, and closes the database. The
  * returned Hub exposes stores, bus, presence and closeStreams for in-process
  * tests; the binary uses only listen, close and url.
@@ -95,6 +97,7 @@ export function createHub(options: HubOptions): Hub {
     streams: new Set(),
     guardRules: options.guard !== false,
   };
+  for (const id of agents.allOnlineIds()) deps.presence.expect(id);
 
   router.add('GET', '/v1/health', () => {
     const body: HealthResponse = { ok: true, version: HUB_VERSION, pid: process.pid };

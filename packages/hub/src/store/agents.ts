@@ -158,14 +158,23 @@ function toPeer(row: AgentRow): Peer {
 }
 
 /**
- * AgentStore owns the agent table: registration with reclaim by the edge's own
- * agent id, by session id or by window id, adoption of an offline namesake by
- * an identified registration (absorbing the window's placeholder), name
- * suffixing (the guard's name is reserved), provisional reconnects that keep an
- * identity, token lookup, presence (online/offline), session relinking, peer
- * listing, the per-workspace system agent the guard sends from, and the
- * quarantine flag. One instance per hub; it is not safe to share one
- * DatabaseSync across threads.
+ * AgentStore owns the hub's agent table: who is registered in each workspace,
+ * under which name, session and window, and whether they are online.
+ *
+ * It registers agents, reclaiming an existing one by the edge's own agent id,
+ * by session id or (for provisional requests) by window id. An identified
+ * registration adopts an offline namesake and absorbs the window's placeholder,
+ * so conversations and mailbox survive. Names are suffixed to stay unique among
+ * online agents, and the guard's name is reserved. It also resolves tokens,
+ * names, sessions and windows to agents, lists peers and online ids (including
+ * those of every workspace, which the hub uses to give agents the reconnect
+ * grace at start), marks agents offline, relinks sessions, keeps the
+ * per-workspace system agent the guard sends from, and holds the quarantine
+ * flag.
+ *
+ * Only online agents are addressable by token or name; lookups by id, session
+ * and window return agents in any status. One instance per hub, on a
+ * synchronous DatabaseSync that must not be shared across threads.
  */
 export class AgentStore {
   readonly #db: DatabaseSync;
@@ -429,6 +438,19 @@ export class AgentStore {
     const rows = this.#db
       .prepare(`SELECT id FROM agent WHERE workspace = ? AND status = 'online' AND id != ?`)
       .all(workspace, excludeId ?? '') as unknown as { id: string }[];
+    return rows.map((r) => r.id);
+  }
+
+  /**
+   * allOnlineIds returns the ids of the online agents of every workspace; the
+   * hub gives each the reconnect grace when it starts, since no stream is open.
+   */
+  allOnlineIds(): string[] {
+    const rows = this.#db
+      .prepare(`SELECT id FROM agent WHERE status = 'online'`)
+      .all() as unknown as {
+      id: string;
+    }[];
     return rows.map((r) => r.id);
   }
 

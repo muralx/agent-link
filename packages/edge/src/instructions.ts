@@ -1,13 +1,21 @@
 /**
- * SERVER_INSTRUCTIONS is the MCP server instructions string Claude Code shows
- * the agent: that the edge already registered it provisionally, how to identify
- * itself (infer name, a short responsibility and capabilities; ask for a name
- * only when inference fails), how channel messages look, that replies must go
- * through the reply tool and whom they reach in each conversation kind, what
- * each expectation means (information between agents waits for the next turn),
- * that messages already shown must not be fetched again, what not to repeat in
- * a body, how to treat human and provisional peers, and what the guard's
- * quarantine means for the agent.
+ * SERVER_INSTRUCTIONS is the MCP server instructions text the edge hands to
+ * Claude Code, which shows it to the agent as the guide to using agent-link.
+ *
+ * It tells the agent that the edge already registered it provisionally and that
+ * it should identify itself with register (inferring name, responsibility and
+ * capabilities, asking the user for a name only when it cannot infer one). It
+ * describes the shape of an incoming channel message, that the message is
+ * complete and must not be fetched again, and that answers go through the reply
+ * tool in the message's conversation_id. It explains what each expectation
+ * (reply, updates, none) means and that every message wakes its recipient, so
+ * senders should send only what the recipient needs. It states whom a reply
+ * reaches in a direct, announcement or group conversation, how to treat human
+ * and provisional peers, and what a guard quarantine means (stop sending and
+ * tell the user the error).
+ *
+ * The value is a static string; changing the messaging behaviour of the hub or
+ * edge means updating this text so the agent's guidance stays in line with it.
  */
 export const SERVER_INSTRUCTIONS = `agent-link connects this session to the other Claude Code agents of its workspace (the workspace named in .agent-link.json at the repository root).
 

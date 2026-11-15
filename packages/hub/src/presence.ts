@@ -5,11 +5,18 @@
 export const DEFAULT_GRACE_MS = 30_000;
 
 /**
- * PresenceTracker turns SSE stream lifecycles into presence: an agent whose
- * last stream disconnects is reported expired after graceMs unless a stream
- * reconnects first, and isConnected tells whether an edge currently holds a
- * stream (so a session end can leave a live window alone). Timers are unref'd
- * so they never keep the process alive.
+ * PresenceTracker turns SSE stream lifecycles into presence: an agent is
+ * reported expired through the onExpired callback once graceMs (default
+ * DEFAULT_GRACE_MS) passes with no open stream.
+ *
+ * It counts open streams per agent. The last stream closing (disconnected) or
+ * the hub starting an online agent that has no stream (expect) starts the grace
+ * timer; connected cancels a pending expiry, so a reconnect within the grace
+ * keeps the agent online. isConnected tells whether an edge currently holds a
+ * stream, so a session end can leave a live window alone. forget drops an
+ * agent's state on unregister or re-registration, and close cancels all timers
+ * at shutdown. Timers are unref'd and never keep the process alive. State is in
+ * memory only and single-threaded.
  */
 export class PresenceTracker {
   readonly #graceMs: number;
@@ -36,8 +43,13 @@ export class PresenceTracker {
   }
 
   /**
-   * disconnected records a closed stream; when it was the agent's last,
-   * schedules the expiry callback after the grace period.
+   * disconnected records one closed stream for the agent and, when it was the
+   * last, starts the grace timer that reports the agent expired after graceMs.
+   *
+   * While other streams remain open it only decrements the count. An agent with
+   * no recorded streams is treated as having just lost its last one, so the
+   * grace still starts. A later connected call within the grace cancels the
+   * expiry.
    */
   disconnected(agentId: string): void {
     const remaining = (this.#streams.get(agentId) ?? 1) - 1;
@@ -46,6 +58,21 @@ export class PresenceTracker {
       return;
     }
     this.#streams.delete(agentId);
+    this.#schedule(agentId);
+  }
+
+  /**
+   * expect starts the grace for an agent that is online with no stream open,
+   * as every online agent is when the hub starts: it expires unless an edge
+   * connects first. A no-op when a stream is open or an expiry is pending.
+   */
+  expect(agentId: string): void {
+    if (this.isConnected(agentId) || this.#timers.has(agentId)) return;
+    this.#schedule(agentId);
+  }
+
+  /** #schedule reports the agent expired after the grace period. */
+  #schedule(agentId: string): void {
     const timer = setTimeout(() => {
       this.#timers.delete(agentId);
       this.#onExpired(agentId);

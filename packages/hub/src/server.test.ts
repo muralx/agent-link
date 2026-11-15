@@ -1,4 +1,7 @@
 import { test } from 'node:test';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import assert from 'node:assert/strict';
 import type { HubEvent } from '@agent-link/protocol';
 import { createHub, type Hub } from './server.ts';
@@ -200,4 +203,29 @@ test("register with agent_id needs that agent's token and upgrades it whatever i
     assert.equal(body.agent.name, 'architect');
     assert.equal(body.agent.provisional, false);
   });
+});
+
+test('an agent left online by a stopped hub goes offline after the grace and its name is free again', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'agent-link-hub-'));
+  const dbPath = join(dir, 'hub.db');
+  try {
+    const first = createHub({ dbPath, port: 0 });
+    const r1 = await register(await first.listen(), reg('s1', 'reviewer'));
+    assert.equal(r1.data.agent.name, 'reviewer');
+    await first.close();
+
+    const second = createHub({ dbPath, port: 0, graceMs: 20 });
+    const base = await second.listen();
+    try {
+      assert.equal(second.stores.agents.byId(r1.data.agent.id)?.status, 'online');
+      await new Promise((resolve) => setTimeout(resolve, 60));
+      assert.equal(second.stores.agents.byId(r1.data.agent.id)?.status, 'offline');
+      const r2 = await register(base, reg('s2', 'reviewer'));
+      assert.equal(r2.data.agent.name, 'reviewer', 'no -2 suffix');
+    } finally {
+      await second.close();
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });

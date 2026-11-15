@@ -197,17 +197,32 @@ function summarise(messages: Message[]): Record<string, unknown> {
 }
 
 /**
- * TOOLS defines the eleven agent-facing MCP tools (register, peers, send,
- * reply, await, inbox, conversation, conversations, unregister, guard, audit):
- * name, description for the model, zod input schema and handler. register sends
- * the edge's current agent_id and bearer token when it already has an identity,
- * so the hub upgrades that very agent rather than matching by session id, and
- * answers with channel "enabled" or "unavailable" (plus CHANNEL_UNAVAILABLE as
- * warning) so the model knows whether it can be woken; it lists the online
- * peers by name only (and the humans among them), while peers returns
- * compactPeer entries. await records itself in the session for its duration and
- * notes what it returned; the audit feed cuts bodies with feedEntry. The
- * descriptions tell the model whom each kind of conversation reaches and what
+ * TOOLS defines the eleven agent-facing MCP tools of the edge (register, peers,
+ * send, reply, await, inbox, conversation, conversations, unregister, guard,
+ * audit), each with its name, the description shown to the model, a zod input
+ * schema and a handler.
+ *
+ * Every handler except register needs the session's identity and fails if the
+ * window has not registered. register resolves the workspace (the argument,
+ * else the nearest .agent-link.json; error workspace_required) and the session
+ * id (error session_required), sends the edge's current agent_id and token when
+ * it already has an identity so the hub upgrades that agent, adopts the
+ * registration into the session, and answers with the agent id, name, channel
+ * "enabled" or "unavailable" (with CHANNEL_UNAVAILABLE as warning), the names
+ * of the online peers and the humans among them, and a note when the name was
+ * suffixed. peers returns compactPeer entries. reply sends in an existing
+ * conversation and never sets recipients or subject. await marks itself in the
+ * session while it blocks and records the message ids it returned, so they are
+ * not shown again. inbox returns a summary of unread messages only. unregister
+ * also clears the local identity. guard maps status to the hub's status, and
+ * quarantine, release or request (the last posted as a request to the humans)
+ * to guard actions on a named agent. audit serves the human relay or watcher:
+ * its feed chains hub long-polls of AWAIT_SLICE_S seconds up to wait_s,
+ * reporting progress between them and stopping early when the call is aborted,
+ * and cuts each body with feedEntry.
+ *
+ * The descriptions are the model's only guidance: they say whom each
+ * conversation kind reaches, that every message wakes its recipient, and what
  * not to repeat in a body.
  */
 export const TOOLS: ToolDefinition[] = [
@@ -281,7 +296,7 @@ export const TOOLS: ToolDefinition[] = [
   {
     name: 'send',
     description:
-      'Send a message. Without conversation_id this starts a conversation with the peers named in `to` (or "*" for every online peer), and the recipients decide its kind: one name is a direct conversation; several names or "*" an announcement, where each recipient\'s reply reaches only you and your follow-ups reach all of them; group=true instead makes a group, where every message reaches every participant (use it only for a real discussion between them). With conversation_id it continues that conversation; `to` then adds participants. expectation: "reply" if you want an answer, "updates" if you want progress until a final message, "none" (default) for information, which reaches an agent at its next turn instead of waking it. The sender, recipients, expectation and subject travel as fields: do not repeat them in the body. Returns immediately with who received it; use await or wait for the channel notification to get the answer.',
+      'Send a message. Without conversation_id this starts a conversation with the peers named in `to` (or "*" for every online peer), and the recipients decide its kind: one name is a direct conversation; several names or "*" an announcement, where each recipient\'s reply reaches only you and your follow-ups reach all of them; group=true instead makes a group, where every message reaches every participant (use it only for a real discussion between them). With conversation_id it continues that conversation; `to` then adds participants. expectation: "reply" if you want an answer, "updates" if you want progress until a final message, "none" (default) for information that needs no answer; every message wakes its recipient, so send only what it needs. The sender, recipients, expectation and subject travel as fields: do not repeat them in the body. Returns immediately with who received it; use await or wait for the channel notification to get the answer.',
     schema: SendInputSchema,
     handler: async (raw: unknown, ctx: ToolContext): Promise<unknown> => {
       const id = identity(ctx);

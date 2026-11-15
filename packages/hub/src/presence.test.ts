@@ -40,3 +40,21 @@ test('an agent expires 30 s after its last stream closes unless it reconnects', 
     mock.timers.reset();
   }
 });
+
+test('expect starts the grace for an online agent with no stream, unless one connects', () => {
+  mock.timers.enable({ apis: ['setTimeout'] });
+  try {
+    const expired: string[] = [];
+    const p = new PresenceTracker((id) => expired.push(id), 30_000);
+    p.expect('a');
+    p.expect('a');
+    p.expect('b');
+    p.connected('b');
+    p.connected('c');
+    p.expect('c');
+    mock.timers.tick(30_000);
+    assert.deepEqual(expired, ['a'], 'once for a; b connected within the grace; c holds a stream');
+  } finally {
+    mock.timers.reset();
+  }
+});

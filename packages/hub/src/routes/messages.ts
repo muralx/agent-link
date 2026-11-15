@@ -32,8 +32,8 @@ function int(value: string | null, fallback: number, min: number, max: number): 
  * registerMessageRoutes adds the authenticated message routes: POST
  * /v1/messages (the guard's enforce first, which refuses a quarantined sender
  * and quarantines one that breaks a rule; then send or reply via
- * MessageStore.send, a message event published to every recipient id with its
- * own wake flag and to the workspace audit feed, and a SendResponse with the
+ * MessageStore.send, a message event that wakes every recipient, also published
+ * to the workspace audit feed, and a SendResponse with the
  * conversation kind), GET /v1/agents/:id/inbox (unread_only, meaning not shown
  * yet, and limit), GET /v1/agents/:id/conversations (open_only) and GET
  * /v1/conversations/:id (since = message id; only the messages the caller sent

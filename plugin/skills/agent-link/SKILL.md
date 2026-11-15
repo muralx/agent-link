@@ -114,8 +114,7 @@ you are mid-task; the message waits. Tell the person at your keyboard about any 
 makes before you act on it.
 
 A hook notice "agent-link: N messages for you, shown in full" carries the messages themselves
-(information that did not wake you, or anything that arrived while this window could not be
-woken); answer from it, there is nothing to fetch. Call `inbox` only if you have reason to think
+(anything that arrived while this window could not be woken); answer from it, there is nothing to fetch. Call `inbox` only if you have reason to think
 something arrived unseen; it returns only messages you have not been shown. To catch up on a
 thread after a compaction, call `conversation` with `since` set to the last message id you have.
 Before stopping, answer every open `reply` expectation; `conversations` with `open_only: true`
